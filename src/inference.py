@@ -69,7 +69,7 @@ if __name__ == "__main__":
         trained_model = str(project_root / "runs" / "detect" / "yolo26_traffic" / "vehicle_detector" / "weights" / "best.pt")
         
     # Source path (can be image file, folder of images, or video file)
-    test_source = str(project_root / "dataset" / "images" / "val")
+    test_source = str(project_root / "dataset" / "images" / "test")
     
     # Check if model exists before running
     if Path(trained_model).exists():

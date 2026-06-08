@@ -32,15 +32,19 @@ def download_youtube_video(url, output_path="temp_video.mp4"):
     print(f"Download completed! Saved to: {output_path}")
     return output_path
 
-def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=300, interval_seconds=2.0, val_ratio=0.2):
+def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=300, interval_seconds=2.0, val_ratio=0.08, test_ratio=0.12):
     """Read HLS Live stream URL and capture frames in real-time."""
     train_img_dir = Path(output_dir) / "images" / "train"
     val_img_dir = Path(output_dir) / "images" / "val"
+    test_img_dir = Path(output_dir) / "images" / "test"
     
     train_img_dir.mkdir(parents=True, exist_ok=True)
     val_img_dir.mkdir(parents=True, exist_ok=True)
+    test_img_dir.mkdir(parents=True, exist_ok=True)
+    
     (Path(output_dir) / "labels" / "train").mkdir(parents=True, exist_ok=True)
     (Path(output_dir) / "labels" / "val").mkdir(parents=True, exist_ok=True)
+    (Path(output_dir) / "labels" / "test").mkdir(parents=True, exist_ok=True)
 
     print("Connecting to live stream using OpenCV...")
     cap = cv2.VideoCapture(stream_url)
@@ -73,8 +77,16 @@ def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=30
                 
             # Capture frame based on interval
             if current_time - last_saved_time >= interval_seconds:
-                is_val = random.random() < val_ratio
-                dest_dir = val_img_dir if is_val else train_img_dir
+                r = random.random()
+                if r < 1.0 - val_ratio - test_ratio:
+                    dest_dir = train_img_dir
+                    split_name = "training"
+                elif r < 1.0 - test_ratio:
+                    dest_dir = val_img_dir
+                    split_name = "validation"
+                else:
+                    dest_dir = test_img_dir
+                    split_name = "testing"
                 
                 # Use timestamp for unique file names
                 timestamp = int(current_time * 1000)
@@ -84,7 +96,7 @@ def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=30
                 cv2.imwrite(str(img_path), frame)
                 saved_count += 1
                 last_saved_time = current_time
-                print(f"[{int(elapsed_time)}s / {capture_duration_seconds}s] Saved frame {saved_count}: {img_name} to {'validation' if is_val else 'training'} set")
+                print(f"[{int(elapsed_time)}s / {capture_duration_seconds}s] Saved frame {saved_count}: {img_name} to {split_name} set")
 
             # Show stream preview (can be disabled in headless servers)
             try:
@@ -101,15 +113,19 @@ def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=30
         cv2.destroyAllWindows()
         print(f"Capture finished. Total frames saved: {saved_count}")
 
-def extract_frames_from_offline_video(video_path, output_dir, interval_seconds=2.0, val_ratio=0.2):
+def extract_frames_from_offline_video(video_path, output_dir, interval_seconds=2.0, val_ratio=0.08, test_ratio=0.12):
     """Extract frames from offline video file."""
     train_img_dir = Path(output_dir) / "images" / "train"
     val_img_dir = Path(output_dir) / "images" / "val"
+    test_img_dir = Path(output_dir) / "images" / "test"
     
     train_img_dir.mkdir(parents=True, exist_ok=True)
     val_img_dir.mkdir(parents=True, exist_ok=True)
+    test_img_dir.mkdir(parents=True, exist_ok=True)
+    
     (Path(output_dir) / "labels" / "train").mkdir(parents=True, exist_ok=True)
     (Path(output_dir) / "labels" / "val").mkdir(parents=True, exist_ok=True)
+    (Path(output_dir) / "labels" / "test").mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -130,8 +146,14 @@ def extract_frames_from_offline_video(video_path, output_dir, interval_seconds=2
             break
         
         if frame_count % frame_step == 0:
-            is_val = random.random() < val_ratio
-            dest_dir = val_img_dir if is_val else train_img_dir
+            r = random.random()
+            if r < 1.0 - val_ratio - test_ratio:
+                dest_dir = train_img_dir
+            elif r < 1.0 - test_ratio:
+                dest_dir = val_img_dir
+            else:
+                dest_dir = test_img_dir
+                
             img_name = f"{Path(video_path).stem}_frame_{frame_count:06d}.jpg"
             cv2.imwrite(str(dest_dir / img_name), frame)
             saved_count += 1
@@ -156,11 +178,18 @@ if __name__ == "__main__":
             output_dir=dataset_root,
             capture_duration_seconds=300,
             interval_seconds=2.0,
-            val_ratio=0.2
+            val_ratio=0.08,
+            test_ratio=0.12
         )
     else:
         # For offline video
         video_file = "temp_video.mp4"
         if not os.path.exists(video_file):
             download_youtube_video(youtube_url, video_file)
-        extract_frames_from_offline_video(video_file, dataset_root, interval_seconds=2.0, val_ratio=0.2)
+        extract_frames_from_offline_video(
+            video_file, 
+            dataset_root, 
+            interval_seconds=2.0, 
+            val_ratio=0.08, 
+            test_ratio=0.12
+        )

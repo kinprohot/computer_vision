@@ -25,11 +25,13 @@ computer_vision/
 │
 ├── dataset/                   # Thư mục chứa hình ảnh và file nhãn đã gán
 │   ├── images/
-│   │   ├── train/             # Ảnh dùng để Train
-│   │   └── val/               # Ảnh dùng để Validation
+│   │   ├── train/             # Ảnh dùng để Train (80%)
+│   │   ├── val/               # Ảnh dùng để Validation (8%)
+│   │   └── test/              # Ảnh dùng để Test (12%)
 │   └── labels/
 │       ├── train/             # Nhãn (.txt) tương ứng của ảnh Train
-│       └── val/               # Nhãn (.txt) tương ứng của ảnh Val
+│       ├── val/               # Nhãn (.txt) tương ứng của ảnh Val
+│       └── test/              # Nhãn (.txt) tương ứng của ảnh Test
 │
 ├── runs/                      # Kết quả huấn luyện và suy luận
 │   ├── detect/

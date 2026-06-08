@@ -18,7 +18,7 @@ def auto_label_dataset(dataset_dir="dataset", model_name="yolo26n.pt"):
     model = YOLO(model_name)
     dataset_path = Path(dataset_dir)
     
-    for split in ["train", "val"]:
+    for split in ["train", "val", "test"]:
         img_dir = dataset_path / "images" / split
         label_dir = dataset_path / "labels" / split
         

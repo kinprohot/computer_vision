@@ -1,6 +1,7 @@
 path: C:/dev/computer_vision/dataset
 train: images/train
 val: images/val
+test: images/test
 
 names:
   0: car
