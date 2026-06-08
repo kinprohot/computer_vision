@@ -455,6 +455,51 @@
             color: var(--text-muted);
             font-size: 0.875rem;
         }
+
+        /* Control Bar Styles */
+        .control-bar {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            padding: 0.75rem 1rem;
+            border-radius: 0.75rem;
+        }
+
+        .btn-ctrl {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .btn-ctrl:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px var(--primary-glow);
+        }
+
+        .btn-ctrl:active {
+            transform: translateY(0);
+        }
+
+        .stream-view-container img, .stream-view-container canvas {
+            transition: transform 0.2s ease-in-out;
+            transform-origin: center center;
+        }
     </style>
 </head>
 <body>
@@ -530,40 +575,27 @@
                 </div>
                 <!-- Processing MJPEG Stream -->
                 <img id="aiStreamImage" src="" alt="Live AI Stream" onload="onStreamLoaded()" onerror="onStreamError()" />
+                <!-- Canvas for paused frame -->
+                <canvas id="pauseCanvas" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain;"></canvas>
             </div>
 
-            <!-- Dashboard Stats -->
-            <div class="stats-grid">
-                <!-- Car Stat -->
-                <div class="stat-card car">
-                    <div class="stat-label"><i class="fa-solid fa-car"></i> Ô tô (Car)</div>
-                    <div id="val-car" class="stat-value">0</div>
-                </div>
-                <!-- Motorcycle Stat -->
-                <div class="stat-card motorcycle">
-                    <div class="stat-label"><i class="fa-solid fa-motorcycle"></i> Xe máy (Motor)</div>
-                    <div id="val-motorcycle" class="stat-value">0</div>
-                </div>
-                <!-- Truck Stat -->
-                <div class="stat-card truck">
-                    <div class="stat-label"><i class="fa-solid fa-truck"></i> Xe tải (Truck)</div>
-                    <div id="val-truck" class="stat-value">0</div>
-                </div>
-                <!-- Bus Stat -->
-                <div class="stat-card bus">
-                    <div class="stat-label"><i class="fa-solid fa-bus"></i> Xe buýt (Bus)</div>
-                    <div id="val-bus" class="stat-value">0</div>
-                </div>
-                <!-- Plate Stat -->
-                <div class="stat-card plate">
-                    <div class="stat-label"><i class="fa-solid fa-id-card"></i> Biển số xe</div>
-                    <div id="val-plate" class="stat-value">0</div>
-                </div>
-                <!-- FPS Stat -->
-                <div class="stat-card fps">
-                    <div class="stat-label"><i class="fa-solid fa-bolt"></i> Tốc độ FPS</div>
-                    <div id="val-fps" class="stat-value">0.0</div>
-                </div>
+            <!-- Custom Camera Controls (Zoom, Pause, Fullscreen) -->
+            <div class="control-bar">
+                <button class="btn-ctrl" onclick="togglePause()">
+                    <i id="pauseIcon" class="fa-solid fa-pause"></i> <span id="pauseText">Tạm dừng</span>
+                </button>
+                <button class="btn-ctrl" onclick="zoomIn()">
+                    <i class="fa-solid fa-magnifying-glass-plus"></i> Phóng to
+                </button>
+                <button class="btn-ctrl" onclick="zoomOut()">
+                    <i class="fa-solid fa-magnifying-glass-minus"></i> Thu nhỏ
+                </button>
+                <button class="btn-ctrl" onclick="resetZoom()">
+                    <i class="fa-solid fa-arrows-rotate"></i> Reset Zoom
+                </button>
+                <button class="btn-ctrl" onclick="toggleFullscreen()">
+                    <i class="fa-solid fa-expand"></i> Toàn màn hình
+                </button>
             </div>
         </div>
     </div>
@@ -574,49 +606,57 @@
     </footer>
 
     <script>
-        let statsInterval = null;
         let activeVideoId = null;
+        let isPaused = false;
+        let currentScale = 1.0;
 
         function openAIPanel(videoId, title) {
             activeVideoId = videoId;
             document.getElementById('panelTitle').innerText = title;
             
-            // Show loading spinner, reset stats values
+            // Show loading spinner
             document.getElementById('streamLoader').style.display = 'flex';
-            resetStatsValues();
+            
+            // Reset state
+            isPaused = false;
+            currentScale = 1.0;
+            applyZoom();
+            
+            // Hide canvas, show img
+            document.getElementById('pauseCanvas').style.display = 'none';
+            const streamImg = document.getElementById('aiStreamImage');
+            streamImg.style.display = 'block';
 
             // Set source of image to connect to backend stream
-            const streamImg = document.getElementById('aiStreamImage');
             streamImg.src = `/api/stream/${videoId}`;
 
             // Add classes to animate panel and overlay into view
             document.getElementById('overlay').classList.add('active');
             document.getElementById('aiPanel').classList.add('active');
-
-            // Start polling statistics
-            startStatsPolling(videoId);
+            
+            // Update Pause button text
+            document.getElementById('pauseIcon').className = "fa-solid fa-pause";
+            document.getElementById('pauseText').innerText = "Tạm dừng";
         }
 
         function closeAIPanel() {
-            // Stop stats interval
-            if (statsInterval) {
-                clearInterval(statsInterval);
-                statsInterval = null;
-            }
-
             // Disconnect backend connection by cutting off image source
             const streamImg = document.getElementById('aiStreamImage');
             streamImg.src = "";
+            
+            const canvas = document.getElementById('pauseCanvas');
+            canvas.style.display = 'none';
 
             // Remove visual classes
             document.getElementById('overlay').classList.remove('active');
             document.getElementById('aiPanel').classList.remove('active');
             
             activeVideoId = null;
+            isPaused = false;
+            currentScale = 1.0;
         }
 
         function onStreamLoaded() {
-            // Hide loader spinner when image first receives data
             const streamImg = document.getElementById('aiStreamImage');
             if (streamImg.src && !streamImg.src.endsWith('/')) {
                 document.getElementById('streamLoader').style.display = 'none';
@@ -625,38 +665,85 @@
 
         function onStreamError() {
             console.error("Stream connection failed.");
-            // Keep loader or show error text
         }
 
-        function resetStatsValues() {
-            document.getElementById('val-car').innerText = "0";
-            document.getElementById('val-motorcycle').innerText = "0";
-            document.getElementById('val-truck').innerText = "0";
-            document.getElementById('val-bus').innerText = "0";
-            document.getElementById('val-plate').innerText = "0";
-            document.getElementById('val-fps').innerText = "0.0";
-        }
-
-        function startStatsPolling(videoId) {
-            if (statsInterval) clearInterval(statsInterval);
-
-            statsInterval = setInterval(() => {
-                if (!activeVideoId) return;
+        function togglePause() {
+            const img = document.getElementById('aiStreamImage');
+            const canvas = document.getElementById('pauseCanvas');
+            const icon = document.getElementById('pauseIcon');
+            const text = document.getElementById('pauseText');
+            
+            if (!isPaused) {
+                // Pause the stream: Draw current image to canvas
+                canvas.width = img.naturalWidth || img.clientWidth || 640;
+                canvas.height = img.naturalHeight || img.clientHeight || 360;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 
-                fetch(`/api/stats/${videoId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.status === "active") {
-                            document.getElementById('val-car').innerText = data.car;
-                            document.getElementById('val-motorcycle').innerText = data.motorcycle;
-                            document.getElementById('val-truck').innerText = data.truck;
-                            document.getElementById('val-bus').innerText = data.bus;
-                            document.getElementById('val-plate').innerText = data.license_plate;
-                            document.getElementById('val-fps').innerText = data.fps;
-                        }
-                    })
-                    .catch(err => console.error("Error fetching stats:", err));
-            }, 800); // Poll every 800ms
+                // Show canvas, hide img
+                img.style.display = 'none';
+                canvas.style.display = 'block';
+                
+                // Stop network stream
+                img.dataset.savedSrc = img.src;
+                img.src = "";
+                
+                isPaused = true;
+                icon.className = "fa-solid fa-play";
+                text.innerText = "Tiếp tục";
+            } else {
+                // Unpause
+                img.src = img.dataset.savedSrc || `/api/stream/${activeVideoId}`;
+                
+                // Hide canvas, show img
+                canvas.style.display = 'none';
+                img.style.display = 'block';
+                
+                isPaused = false;
+                icon.className = "fa-solid fa-pause";
+                text.innerText = "Tạm dừng";
+            }
+        }
+
+        function zoomIn() {
+            currentScale = Math.min(3.0, currentScale + 0.25);
+            applyZoom();
+        }
+
+        function zoomOut() {
+            currentScale = Math.max(1.0, currentScale - 0.25);
+            applyZoom();
+        }
+
+        function resetZoom() {
+            currentScale = 1.0;
+            applyZoom();
+        }
+
+        function applyZoom() {
+            const img = document.getElementById('aiStreamImage');
+            const canvas = document.getElementById('pauseCanvas');
+            img.style.transform = `scale(${currentScale})`;
+            canvas.style.transform = `scale(${currentScale})`;
+        }
+
+        function toggleFullscreen() {
+            const container = document.querySelector('.stream-view-container');
+            if (!document.fullscreenElement) {
+                if (container.requestFullscreen) {
+                    container.requestFullscreen();
+                } else if (container.mozRequestFullScreen) {
+                    container.mozRequestFullScreen();
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
+                } else if (container.msRequestFullscreen) {
+                    container.msRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
         }
     </script>
 </body>

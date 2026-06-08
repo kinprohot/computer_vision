@@ -13,8 +13,8 @@ def train_plate_detector():
     print("Starting license plate training...")
     results = model.train(
         data="config/dataset_plate.yaml",
-        epochs=3,                     # Set to 3 epochs for fast CPU demonstration/testing
-        imgsz=640,
+        epochs=3,                     # Set to 3 epochs for fast CPU training
+        imgsz=320,                    # Image size 320 is much faster on CPU
         batch=8,                      # Batch size 8 is safe for CPU/low RAM
         device=device,
         workers=2,

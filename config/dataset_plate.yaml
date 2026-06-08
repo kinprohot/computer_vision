@@ -4,4 +4,6 @@ val: images/val
 test: images/test
 
 names:
-  0: license_plate
+  0: plate_long
+  1: plate_square
+  2: plate_yellow

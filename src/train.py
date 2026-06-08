@@ -22,7 +22,7 @@ def train_yolo26():
     results = model.train(
         data=str(dataset_yaml),       # Path to dataset yaml config
         epochs=50,                    # Set to 5 epochs for quick CPU testing/demonstration
-        imgsz=640,                   # Image size
+        imgsz=320,                   # Image size 320 is much faster on CPU
         batch=4,                     # Small batch size for CPU/low RAM safety
         device=device,               # Dynamic device selection
         workers=2,                   # Fewer workers to prevent resource clogging
