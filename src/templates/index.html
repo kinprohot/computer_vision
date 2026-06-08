@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO26 - Real-time Traffic Monitor Dashboard</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --bg-color: #080b11;
+            --card-bg: rgba(17, 25, 40, 0.65);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --primary: #3b82f6; /* Blue */
+            --primary-glow: rgba(59, 130, 246, 0.4);
+            --accent: #10b981; /* Green */
+            --danger: #ef4444; /* Red */
+            --warning: #f59e0b; /* Yellow */
+            --orange: #f97316; /* Orange */
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+            --glass-blur: blur(12px);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
+            color: var(--text-color);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Header Style */
+        header {
+            background: rgba(13, 20, 35, 0.7);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--card-border);
+            padding: 1.25rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: #fff;
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #fff, var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        header h1 span {
+            background: linear-gradient(to right, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .badge-live {
+            background-color: rgba(239, 68, 68, 0.15);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+
+        /* Container & Layout */
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .intro-text {
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .intro-text p {
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0.5rem auto 0;
+            line-height: 1.5;
+        }
+
+        /* Video Grid */
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+            gap: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            .video-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Card Design */
+        .video-card {
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--card-border);
+            border-radius: 1rem;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .video-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.05);
+        }
+
+        .iframe-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+            height: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        .iframe-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+        }
+
+        .card-body {
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            flex-grow: 1;
+        }
+
+        .card-header-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .card-location {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .btn-detect {
+            background: linear-gradient(135deg, var(--primary), #2563eb);
+            color: #fff;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+            margin-top: auto;
+            width: 100%;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+        }
+
+        .btn-detect:hover {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            transform: scale(1.02);
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+        }
+
+        /* Sliding AI Panel Drawer */
+        .ai-panel {
+            position: fixed;
+            top: 0;
+            right: -100%;
+            width: 50%;
+            height: 100%;
+            background: rgba(8, 12, 21, 0.95);
+            backdrop-filter: blur(25px);
+            border-left: 1px solid var(--card-border);
+            z-index: 1000;
+            transition: right 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            box-shadow: -15px 0 40px rgba(0, 0, 0, 0.8);
+        }
+
+        @media (max-width: 1200px) {
+            .ai-panel {
+                width: 80%;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .ai-panel {
+                width: 100%;
+            }
+        }
+
+        .ai-panel.active {
+            right: 0;
+        }
+
+        .ai-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--card-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .ai-header-title {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .ai-header-title h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+
+        .btn-close-panel {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: #fff;
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-close-panel:hover {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .ai-body {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .stream-view-container {
+            width: 100%;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            border: 1px solid var(--card-border);
+            background: #000;
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect */
+            height: 0;
+        }
+
+        .stream-view-container img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--card-border);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+        }
+
+        .stat-card.car::after { background-color: var(--accent); }
+        .stat-card.motorcycle::after { background-color: var(--primary); }
+        .stat-card.truck::after { background-color: var(--warning); }
+        .stat-card.bus::after { background-color: var(--orange); }
+        .stat-card.plate::after { background-color: var(--danger); }
+        .stat-card.fps::after { background-color: #a855f7; }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        /* Floating Active AI overlay background */
+        .overlay-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            z-index: 999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .overlay-bg.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .loading-spinner-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(8, 12, 21, 0.9);
+            gap: 1rem;
+            z-index: 10;
+        }
+
+        .spinner {
+            width: 3.5rem;
+            height: 3.5rem;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Footer */
+        footer {
+            margin-top: 4rem;
+            border-top: 1px solid var(--card-border);
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="logo-section">
+            <div class="logo-icon"><i class="fa-solid fa-brain"></i></div>
+            <div>
+                <h1>YOLO26 <span>TrafficAI</span></h1>
+            </div>
+        </div>
+        <div class="header-meta">
+            <div class="badge-live"><span style="display:inline-block; width: 6px; height: 6px; background-color: var(--danger); border-radius: 50%;"></span> Live Streams</div>
+            <div>Hệ thống giám sát giao thông thực tế</div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="container">
+        <div class="intro-text">
+            <p>Chọn một camera giao thông từ danh sách bên dưới để kích hoạt nhận diện xe máy, ô tô, xe tải, xe buýt và biển số xe theo thời gian thực bằng mô hình YOLO26.</p>
+        </div>
+
+        <!-- Video Grid -->
+        <div class="video-grid">
+            {% for stream in streams %}
+            <div class="video-card">
+                <div class="iframe-container">
+                    <iframe 
+                        src="https://www.youtube.com/embed/{{ stream.id }}?autoplay=0&mute=1" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowfullscreen>
+                    </iframe>
+                </div>
+                <div class="card-body">
+                    <div class="card-header-info">
+                        <h3 class="card-title">{{ stream.title }}</h3>
+                        <div class="badge-live"><i class="fa-solid fa-satellite-dish"></i> Trực tiếp</div>
+                    </div>
+                    <button class="btn-detect" onclick="openAIPanel('{{ stream.id }}', '{{ stream.title }}')">
+                        <i class="fa-solid fa-expand"></i> Kích hoạt Nhận diện AI
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Blur Background Overlay -->
+    <div id="overlay" class="overlay-bg" onclick="closeAIPanel()"></div>
+
+    <!-- Slide-in AI Panel -->
+    <div id="aiPanel" class="ai-panel">
+        <div class="ai-header">
+            <div class="ai-header-title">
+                <div class="logo-icon" style="background: var(--danger); box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);"><i class="fa-solid fa-video"></i></div>
+                <div>
+                    <h2 id="panelTitle">Tên Camera</h2>
+                    <p style="font-size: 0.8rem; color: var(--text-muted);"><i class="fa-solid fa-shield-halved"></i> YOLO26 Engine Active</p>
+                </div>
+            </div>
+            <button class="btn-close-panel" onclick="closeAIPanel()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        
+        <div class="ai-body">
+            <!-- Frame Viewer -->
+            <div class="stream-view-container">
+                <!-- Loading Spinner -->
+                <div id="streamLoader" class="loading-spinner-container">
+                    <div class="spinner"></div>
+                    <p style="font-weight: 500; font-size: 0.9rem;">Đang kết nối luồng Live Stream & Khởi chạy mô hình...</p>
+                </div>
+                <!-- Processing MJPEG Stream -->
+                <img id="aiStreamImage" src="" alt="Live AI Stream" onload="onStreamLoaded()" onerror="onStreamError()" />
+            </div>
+
+            <!-- Dashboard Stats -->
+            <div class="stats-grid">
+                <!-- Car Stat -->
+                <div class="stat-card car">
+                    <div class="stat-label"><i class="fa-solid fa-car"></i> Ô tô (Car)</div>
+                    <div id="val-car" class="stat-value">0</div>
+                </div>
+                <!-- Motorcycle Stat -->
+                <div class="stat-card motorcycle">
+                    <div class="stat-label"><i class="fa-solid fa-motorcycle"></i> Xe máy (Motor)</div>
+                    <div id="val-motorcycle" class="stat-value">0</div>
+                </div>
+                <!-- Truck Stat -->
+                <div class="stat-card truck">
+                    <div class="stat-label"><i class="fa-solid fa-truck"></i> Xe tải (Truck)</div>
+                    <div id="val-truck" class="stat-value">0</div>
+                </div>
+                <!-- Bus Stat -->
+                <div class="stat-card bus">
+                    <div class="stat-label"><i class="fa-solid fa-bus"></i> Xe buýt (Bus)</div>
+                    <div id="val-bus" class="stat-value">0</div>
+                </div>
+                <!-- Plate Stat -->
+                <div class="stat-card plate">
+                    <div class="stat-label"><i class="fa-solid fa-id-card"></i> Biển số xe</div>
+                    <div id="val-plate" class="stat-value">0</div>
+                </div>
+                <!-- FPS Stat -->
+                <div class="stat-card fps">
+                    <div class="stat-label"><i class="fa-solid fa-bolt"></i> Tốc độ FPS</div>
+                    <div id="val-fps" class="stat-value">0.0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <p>&copy; 2026 YOLO26 TrafficAI Project. Phát triển phục vụ mục đích kiểm nghiệm Computer Vision và nhận diện giao thông đô thị.</p>
+    </footer>
+
+    <script>
+        let statsInterval = null;
+        let activeVideoId = null;
+
+        function openAIPanel(videoId, title) {
+            activeVideoId = videoId;
+            document.getElementById('panelTitle').innerText = title;
+            
+            // Show loading spinner, reset stats values
+            document.getElementById('streamLoader').style.display = 'flex';
+            resetStatsValues();
+
+            // Set source of image to connect to backend stream
+            const streamImg = document.getElementById('aiStreamImage');
+            streamImg.src = `/api/stream/${videoId}`;
+
+            // Add classes to animate panel and overlay into view
+            document.getElementById('overlay').classList.add('active');
+            document.getElementById('aiPanel').classList.add('active');
+
+            // Start polling statistics
+            startStatsPolling(videoId);
+        }
+
+        function closeAIPanel() {
+            // Stop stats interval
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+
+            // Disconnect backend connection by cutting off image source
+            const streamImg = document.getElementById('aiStreamImage');
+            streamImg.src = "";
+
+            // Remove visual classes
+            document.getElementById('overlay').classList.remove('active');
+            document.getElementById('aiPanel').classList.remove('active');
+            
+            activeVideoId = null;
+        }
+
+        function onStreamLoaded() {
+            // Hide loader spinner when image first receives data
+            const streamImg = document.getElementById('aiStreamImage');
+            if (streamImg.src && !streamImg.src.endsWith('/')) {
+                document.getElementById('streamLoader').style.display = 'none';
+            }
+        }
+
+        function onStreamError() {
+            console.error("Stream connection failed.");
+            // Keep loader or show error text
+        }
+
+        function resetStatsValues() {
+            document.getElementById('val-car').innerText = "0";
+            document.getElementById('val-motorcycle').innerText = "0";
+            document.getElementById('val-truck').innerText = "0";
+            document.getElementById('val-bus').innerText = "0";
+            document.getElementById('val-plate').innerText = "0";
+            document.getElementById('val-fps').innerText = "0.0";
+        }
+
+        function startStatsPolling(videoId) {
+            if (statsInterval) clearInterval(statsInterval);
+
+            statsInterval = setInterval(() => {
+                if (!activeVideoId) return;
+                
+                fetch(`/api/stats/${videoId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === "active") {
+                            document.getElementById('val-car').innerText = data.car;
+                            document.getElementById('val-motorcycle').innerText = data.motorcycle;
+                            document.getElementById('val-truck').innerText = data.truck;
+                            document.getElementById('val-bus').innerText = data.bus;
+                            document.getElementById('val-plate').innerText = data.license_plate;
+                            document.getElementById('val-fps').innerText = data.fps;
+                        }
+                    })
+                    .catch(err => console.error("Error fetching stats:", err));
+            }, 800); // Poll every 800ms
+        }
+    </script>
+</body>
+</html>
