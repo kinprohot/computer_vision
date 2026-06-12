@@ -15,7 +15,7 @@ app = Flask(__name__, template_folder='templates')
 
 # Load YOLO models
 project_root = Path(__file__).resolve().parent.parent
-vehicle_model_path = str(project_root / "yolo26n.pt") # Revert to pretrained model for high accuracy vehicle detection
+vehicle_model_path = str("yolo26n.pt") # Revert to pretrained model for high accuracy vehicle detection
 plate_model_path = str(project_root / "plate_best.pt")
 
 print(f"[*] Loading pretrained vehicle model: {vehicle_model_path}")
@@ -430,22 +430,28 @@ def gen_frames(video_id):
                                     px2 = x1 + px2_c
                                     py2 = y1 + py2_c
                                     
-                                    # Get predicted class ID: 0 = plate_long, 1 = plate_square, 2 = plate_yellow
-                                    pclass = int(best_plate_box.cls[0].item())
-                                    
+                                    # The new model has 1 class (0: plate). Use Aspect Ratio and HSV color check.
                                     pw = px2 - px1
                                     ph = py2 - py1
                                     ar = pw / ph if ph > 0 else 1.0
                                     
-                                    if pclass == 0:
-                                        is_square = ar <= 2.0
-                                        is_yellow = False
-                                    elif pclass == 1:
-                                        is_square = True
-                                        is_yellow = False
-                                    else: # Class 2: plate_yellow
-                                        is_square = ar <= 2.2
-                                        is_yellow = True
+                                    # Standard Vietnamese square plate is 280x200 (AR ~1.4), long plate is 470x110 (AR ~4.27).
+                                    is_square = ar <= 1.7
+                                    
+                                    # Detect if yellow plate by checking color in HSV space on the plate crop
+                                    is_yellow = False
+                                    plate_crop_temp = frame[py1:py2, px1:px2]
+                                    if plate_crop_temp.size > 0:
+                                        try:
+                                            hsv = cv2.cvtColor(plate_crop_temp, cv2.COLOR_BGR2HSV)
+                                            # Yellow color range in HSV: Hue [10, 35], Saturation [50, 255], Value [50, 255]
+                                            lower_yellow = np.array([10, 50, 50])
+                                            upper_yellow = np.array([35, 255, 255])
+                                            mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+                                            # If more than 15% of the plate is yellow, classify it as a yellow plate (bien vang)
+                                            is_yellow = (np.count_nonzero(mask) / mask.size) > 0.15
+                                        except Exception:
+                                            pass
                                         
                                     # Determine display color and label
                                     plate_color = (0, 255, 255) if is_yellow else colors[4] # Yellow or Red box

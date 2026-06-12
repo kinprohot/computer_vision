@@ -1,9 +1,7 @@
-path: C:/dev/computer_vision/dataset_plate
-train: images/train
-val: images/val
-test: images/test
+path: C:/dev/computer_vision/Vietnamese Car License Plate.v1i.yolo26
+train: train/images
+val: valid/images
 
 names:
-  0: plate_long
-  1: plate_square
-  2: plate_yellow
+  0: plate
+
