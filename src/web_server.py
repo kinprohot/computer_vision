@@ -3,12 +3,12 @@ import re
 import glob
 import time
 import cv2
+import numpy as np
 import yt_dlp
 import hashlib
 from pathlib import Path
 from flask import Flask, render_template, Response, jsonify
 from ultralytics import YOLO
-import easyocr
 from collections import Counter
 
 app = Flask(__name__, template_folder='templates')
@@ -24,11 +24,14 @@ vehicle_model = YOLO(vehicle_model_path)
 print(f"[*] Loading custom license plate model: {plate_model_path}")
 plate_model = YOLO(plate_model_path)
 
-# Initialize EasyOCR Reader on CPU
-print("[*] Initializing EasyOCR Reader (English models)...")
-# Note: First time initializing will download the OCR models (~100MB total) automatically
-reader = easyocr.Reader(['en'], gpu=False)
-print("[*] EasyOCR initialized successfully!")
+# Initialize EasyOCR Reader
+print("[*] Initializing EasyOCR Reader...")
+import torch
+import easyocr
+use_gpu = torch.cuda.is_available()
+print(f"[*] EasyOCR GPU acceleration: {use_gpu}")
+easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+print("[*] EasyOCR Reader initialized successfully!")
 
 # Map COCO classes to our custom dashboard class indices
 # COCO classes: 2: car, 3: motorcycle, 5: bus, 7: truck
@@ -72,22 +75,6 @@ STREAMS = [
     {"id": "x8tUUv-NGXs", "title": "Camera 6"}
 ]
 
-def get_simulated_plate(x1, y1):
-    """Generate a stable, realistic Vietnamese license plate based on the vehicle's position."""
-    # Spatial hashing grid (50x50 pixels) to keep the plate number stable as the car moves
-    grid_x = x1 // 50
-    grid_y = y1 // 50
-    hash_val = int(hashlib.md5(f"{grid_x},{grid_y}".encode()).hexdigest(), 16)
-    
-    provinces = ["29", "30", "31", "51", "59", "43", "75", "15", "60", "36"]
-    letters = ["A", "B", "C", "F", "H", "K", "L", "M", "N", "P", "S", "T", "U", "V", "X", "Y"]
-    
-    prov = provinces[hash_val % len(provinces)]
-    let = letters[(hash_val // 10) % len(letters)]
-    num1 = (hash_val // 100) % 900 + 100  # 3 digits (100-999)
-    num2 = (hash_val // 10000) % 90 + 10  # 2 digits (10-99)
-    
-    return f"{prov}{let}-{num1}.{num2}"
 
 def get_hls_url(video_id):
     """Retrieve HLS stream URL and cache it to speed up connection starts."""
@@ -145,151 +132,182 @@ def get_smoothed_box(track_id, detected_box):
     
     return (avg_x1, avg_y1, avg_x2, avg_y2)
 
-def perform_ocr_single(crop):
-    """Perform EasyOCR on a single image crop."""
-    try:
-        if crop.size == 0:
-            return None
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        results = reader.readtext(gray)
-        if results:
-            raw_text = "".join([res[1] for res in results])
-            cleaned_text = "".join([c for c in raw_text if c.isalnum()]).upper()
-            return cleaned_text
-    except Exception as e:
-        print(f"[!] OCR Single Exception: {e}")
-    return None
-
-def perform_ocr_square(plate_crop):
+def deskew_plate(plate_crop):
     """
-    Split the square license plate crop vertically into top and bottom halves,
-    perform OCR on both, and return a tuple (top_text, bottom_text).
+    Deskew the license plate crop using Hough Lines.
+    Only rotates if the skew angle is between -20 and 20 degrees to avoid spinning it sideways.
     """
     try:
-        h, w = plate_crop.shape[:2]
-        if h == 0 or w == 0:
-            return (None, None)
+        if plate_crop is None or plate_crop.size == 0:
+            return plate_crop
             
-        # Split vertically
-        top_half = plate_crop[0:int(h * 0.52), 0:w]
-        bottom_half = plate_crop[int(h * 0.48):h, 0:w]
+        gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        # Find lines using Probabilistic Hough Transform
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40, minLineLength=max(10, int(plate_crop.shape[1] * 0.3)), maxLineGap=10)
         
-        top_text = perform_ocr_single(top_half)
-        bottom_text = perform_ocr_single(bottom_half)
-        
-        return (top_text, bottom_text)
+        angles = []
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                if -20 < angle < 20:  # Focus on near-horizontal lines
+                    angles.append(angle)
+                    
+        if len(angles) > 0:
+            median_angle = np.median(angles)
+            if abs(median_angle) > 1.0:
+                h, w = plate_crop.shape[:2]
+                center = (w // 2, h // 2)
+                M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+                # Rotate image
+                plate_crop = cv2.warpAffine(plate_crop, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     except Exception as e:
-        print(f"[!] Square OCR Exception: {e}")
-    return (None, None)
+        print(f"[!] Deskew failed: {e}")
+    return plate_crop
 
-def force_format(s, pattern):
-    """
-    Force string s to match pattern of 'D' (digit) and 'L' (letter).
-    """
-    char_to_num = {
-        'I': '1', 'T': '1', 'L': '1', 'J': '1',
-        'Z': '2', 'E': '3', 'A': '4', 'H': '4',
-        'S': '5', 'G': '6', 'B': '8', 'O': '0',
-        'D': '0', 'Q': '0', 'U': '0', 'Y': '7'
+def correct_plate_string(text, is_top_line=None, is_bottom_line=None):
+    if not text:
+        return text
+    text = "".join([c for c in text if c.isalnum()]).upper()
+    
+    digit_to_letter = {
+        '0': 'D', '1': 'I', '2': 'Z', '3': 'B', '4': 'A', 
+        '5': 'S', '6': 'G', '7': 'T', '8': 'B', '9': 'G'
     }
-    num_to_char = {
-        '0': 'O', '1': 'I', '2': 'Z', '3': 'E',
-        '4': 'A', '5': 'S', '6': 'G', '7': 'Y',
-        '8': 'B', '9': 'P'
+    
+    letter_to_digit = {
+        'A': '4', 'B': '8', 'D': '0', 'G': '6', 'I': '1', 
+        'J': '1', 'L': '1', 'O': '0', 'Q': '0', 'S': '5', 
+        'T': '7', 'Z': '2'
     }
-    res = []
-    for i, char in enumerate(s):
-        if i >= len(pattern):
-            # If extra characters, assume they are digits (usually tail of line 2)
-            expected = 'D'
-        else:
-            expected = pattern[i]
+    
+    chars = list(text)
+    
+    if is_bottom_line:
+        for i in range(len(chars)):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+        return "".join(chars)
+        
+    if is_top_line:
+        for i in range(min(2, len(chars))):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+        if len(chars) >= 3:
+            if chars[2] in digit_to_letter:
+                chars[2] = digit_to_letter[chars[2]]
+        return "".join(chars)
+        
+    if len(chars) >= 7:
+        for i in range(2):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+        if chars[2] in digit_to_letter:
+            chars[2] = digit_to_letter[chars[2]]
             
-        if expected == 'D':
-            if char.isalpha():
-                res.append(char_to_num.get(char, '1'))
-            else:
-                res.append(char)
-        elif expected == 'L':
-            if char.isdigit():
-                res.append(num_to_char.get(char, 'A'))
-            else:
-                res.append(char)
-    return "".join(res)
+        num_digits = 5 if len(chars) >= 8 else 4
+        for i in range(len(chars) - num_digits, len(chars)):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+                
+    return "".join(chars)
 
-def clean_and_correct_plate(raw_input, is_square, is_motorcycle):
-    """
-    Cleans OCR output and corrects characters using Vietnamese license plate rules,
-    differentiating between cars (3 chars in part 1) and motorcycles (4 or 5 chars in part 1).
-    """
-    if not raw_input:
-        return ""
+def format_vietnamese_plate(plate_no):
+    if not plate_no or plate_no == "N/A":
+        return plate_no
         
-    if is_square:
-        # If it's a square plate, raw_input is expected to be a tuple/list (top_text, bottom_text)
-        if isinstance(raw_input, (tuple, list)):
-            top_raw, bottom_raw = raw_input
-        else:
-            top_raw = raw_input[:4]
-            bottom_raw = raw_input[4:]
-            
-        top_clean = "".join([c for c in (top_raw or "") if c.isalnum()]).upper()
-        bottom_clean = "".join([c for c in (bottom_raw or "") if c.isalnum()]).upper()
+    clean = plate_no.replace("-", "").replace(".", "").upper().strip()
+    if len(clean) < 7:
+        return plate_no
         
-        # Correct top line (Line 1)
-        if is_motorcycle:
-            # Motorcycle formats:
-            # Format A: 5 characters (e.g., 43A - H3) -> 'DDLLD'
-            # Format B: 4 characters (e.g., 29A1) -> 'DDLD'
-            if len(top_clean) >= 5:
-                top_corrected = force_format(top_clean, 'DDLLD')
-            else:
-                top_corrected = force_format(top_clean, 'DDLD')
+    if clean[3].isalpha():
+        prefix_len = 4
+    elif clean[3].isdigit():
+        if len(clean) == 9:
+            prefix_len = 4
         else:
-            # Car/Truck/Bus square plate: 2 digits + 1 letter -> 'DDL'
-            top_corrected = force_format(top_clean, 'DDL')
-            
-        # Correct bottom line (Line 2) -> all digits (4 or 5 digits) -> 'DDDDD'
-        bottom_corrected = force_format(bottom_clean, 'DDDDD')
-        
-        # Format the final string
-        if is_motorcycle:
-            if len(top_corrected) >= 5:
-                top_part_1 = top_corrected[:3]
-                top_part_2 = top_corrected[3:5]
-                if len(bottom_corrected) >= 5:
-                    return f"{top_part_1}-{top_part_2}-{bottom_corrected[:3]}.{bottom_corrected[3:]}"
-                return f"{top_part_1}-{top_part_2}-{bottom_corrected}"
-            else:
-                if len(bottom_corrected) >= 5:
-                    return f"{top_corrected}-{bottom_corrected[:3]}.{bottom_corrected[3:]}"
-                return f"{top_corrected}-{bottom_corrected}"
-        else:
-            if len(bottom_corrected) >= 5:
-                return f"{top_corrected}-{bottom_corrected[:3]}.{bottom_corrected[3:]}"
-            return f"{top_corrected}-{bottom_corrected}"
-            
+            prefix_len = 3
     else:
-        # Long plate (always car/truck/bus): Line 1 + Line 2 -> 'DDLDDDDD'
-        if isinstance(raw_input, (tuple, list)):
-            text = (raw_input[0] or "") + (raw_input[1] or "")
-        else:
-            text = raw_input
-            
-        cleaned = "".join([c for c in text if c.isalnum()]).upper()
-        corrected = force_format(cleaned, 'DDLDDDDD')
+        prefix_len = 3
         
-        if len(corrected) >= 7:
-            top_part = corrected[:3]
-            bottom_part = corrected[3:]
-            if len(bottom_part) >= 5:
-                return f"{top_part}-{bottom_part[:3]}.{bottom_part[3:]}"
-            return f"{top_part}-{bottom_part}"
-        return corrected
+    prefix = clean[:prefix_len]
+    num_part = clean[prefix_len:]
+    
+    if len(num_part) == 5:
+        formatted_num = f"{num_part[:3]}.{num_part[3:]}"
+    else:
+        formatted_num = num_part
+        
+    return f"{prefix}-{formatted_num}"
+
+def preprocess_easyocr(crop):
+    """Upscale if too small to help OCR detection."""
+    try:
+        if crop is None or crop.size == 0:
+            return crop
+        h, w = crop.shape[:2]
+        target_w = 250
+        if w < target_w:
+            scale = target_w / w
+            crop = cv2.resize(crop, (target_w, int(h * scale)), interpolation=cv2.INTER_CUBIC)
+        return crop
+    except Exception as e:
+        print(f"[!] Error in preprocess_easyocr: {e}")
+        return crop
+
+def perform_ocr_easyocr(plate_crop, is_square):
+    try:
+        if plate_crop is None or plate_crop.size == 0:
+            return None
+            
+        # Preprocess plate crop (deskew + upscale)
+        plate_crop = deskew_plate(plate_crop)
+        plate_crop = preprocess_easyocr(plate_crop)
+        
+        # Convert BGR to RGB for EasyOCR
+        plate_rgb = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2RGB)
+        
+        # Run EasyOCR
+        results = easyocr_reader.readtext(plate_rgb)
+        if not results:
+            return None
+            
+        # Sort results top-to-bottom, then left-to-right
+        results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
+        
+        texts = []
+        # If we have multiple blocks, treat them as top/bottom lines of square plate
+        if is_square and len(results_sorted) >= 2:
+            top_raw = results_sorted[0][1]
+            bottom_raw = results_sorted[1][1]
+            top_clean = correct_plate_string(top_raw, is_top_line=True)
+            bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
+            if top_clean or bottom_clean:
+                raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
+                return format_vietnamese_plate(raw_plate)
+        
+        # Fallback or single block
+        for res in results_sorted:
+            text = res[1]
+            cleaned = "".join([c for c in text if c.isalnum()]).upper()
+            if cleaned:
+                texts.append(cleaned)
+                
+        if not texts:
+            return None
+            
+        combined = "".join(texts)
+        corrected = correct_plate_string(combined)
+        return format_vietnamese_plate(corrected)
+    except Exception as e:
+        print(f"[!] EasyOCR Exception: {e}")
+        return None
+
+
 
 def gen_frames(video_id):
-    """Generate JPEG frames with YOLO26 detections and real-time EasyOCR."""
+    """Generate JPEG frames with YOLO26 detections and real-time VietOCR."""
     global current_stats, ocr_cache
     print(f"[*] Starting AI stream generator for video: {video_id}")
     
@@ -420,7 +438,7 @@ def gen_frames(video_id):
                                     ar = pw / ph if ph > 0 else 1.0
                                     
                                     if pclass == 0:
-                                        is_square = False
+                                        is_square = ar <= 2.0
                                         is_yellow = False
                                     elif pclass == 1:
                                         is_square = True
@@ -440,27 +458,20 @@ def gen_frames(video_id):
                                     
                                     # Check tracking history cache first to completely eliminate text flickering
                                     if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
-                                        if current_time - tracking_history[track_id]["plate_time"] < 10.0:
+                                        # Keep valid plates cached for 10.0 seconds, but retry "N/A" after 1.5 seconds
+                                        cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
+                                        if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
                                             plate_no = tracking_history[track_id]["plate_text"]
                                             
                                     if plate_no is None:
                                         # Crop the plate from original frame for OCR
                                         plate_crop = frame[py1:py2, px1:px2]
-                                        if plate_crop.size > 0:
-                                            if is_square:
-                                                # Square plate: Cắt đôi biển vuông và nhận dạng
-                                                raw_text = perform_ocr_square(plate_crop)
-                                            else:
-                                                # Long plate: Đọc bình thường
-                                                raw_text = perform_ocr_single(plate_crop)
-                                                
-                                            plate_no = clean_and_correct_plate(raw_text, is_square, is_motorcycle=(mapped_cls_id == 1))
-                                        else:
-                                            plate_no = None
+                                        # Căn chỉnh góc nghiêng và nhận diện chữ bằng EasyOCR
+                                        plate_no = perform_ocr_easyocr(plate_crop, is_square)
                                             
-                                        # Fallback to simulated plate if OCR fails
-                                        if not plate_no or len(plate_no) < 4:
-                                            plate_no = get_simulated_plate(px1, py1)
+                                        # Tắt cơ chế giả lập biển số: hiển thị N/A nếu OCR thất bại
+                                        if not plate_no:
+                                            plate_no = "N/A"
                                             
                                         # Save to tracking history cache
                                         if track_id is not None:
@@ -493,11 +504,13 @@ def gen_frames(video_id):
                                         
                                         # Check tracking history cache for fallback
                                         if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
-                                            if current_time - tracking_history[track_id]["plate_time"] < 10.0:
+                                            cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
+                                            if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
                                                 plate_no = tracking_history[track_id]["plate_text"]
                                                 
                                         if plate_no is None:
-                                            plate_no = get_simulated_plate(x1, y1)
+                                            # Tắt cơ chế giả lập biển số cho ước lượng vùng biển: đặt mặc định là N/A
+                                            plate_no = "N/A"
                                             if track_id is not None:
                                                 tracking_history[track_id]["plate_text"] = plate_no
                                                 tracking_history[track_id]["plate_time"] = current_time
