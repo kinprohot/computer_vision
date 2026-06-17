@@ -1,6 +1,7 @@
 import torch
 from ultralytics import YOLO
 from pathlib import Path
+import shutil
 
 def train_yolo26():
     # Resolve absolute paths relative to project root (parent of src folder)
@@ -35,6 +36,15 @@ def train_yolo26():
     print("Running validation...")
     metrics = model.val()
     print(f"Validation mAP50-95: {metrics.box.map}")
+    
+    # Copy the best trained model to project root as vehicle_best.pt
+    best_weights_path = project_root / "runs" / "detect" / "yolo26_traffic" / "vehicle_detector" / "weights" / "best.pt"
+    dest_path = project_root / "vehicle_best.pt"
+    if best_weights_path.exists():
+        print(f"Copying best model weights from {best_weights_path} to {dest_path}")
+        shutil.copy(best_weights_path, dest_path)
+    else:
+        print(f"Warning: Trained weights not found at {best_weights_path}")
 
 if __name__ == "__main__":
     train_yolo26()

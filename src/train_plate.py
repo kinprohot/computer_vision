@@ -21,7 +21,7 @@ def train_plate_detector():
     
     results = model.train(
         data=str(dataset_yaml),
-        epochs=10,                     # Set to 10 epochs for training
+        epochs=20,                     # Set to 10 epochs for training
         imgsz=320,                    # Image size 320 is much faster on CPU
         batch=8,                      # Batch size 8 is safe for CPU/low RAM
         device=device,

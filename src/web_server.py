@@ -15,23 +15,54 @@ app = Flask(__name__, template_folder='templates')
 
 # Load YOLO models
 project_root = Path(__file__).resolve().parent.parent
-vehicle_model_path = str("yolo26n.pt") # Revert to pretrained model for high accuracy vehicle detection
-plate_model_path = str(project_root / "plate_best.pt")
+vehicle_model_path = project_root / "vehicle_best.pt"
+if not vehicle_model_path.exists():
+    vehicle_model_path = project_root / "yolo26n.pt"
+    print(f"[!] Custom vehicle model not found. Falling back to pretrained model: {vehicle_model_path}")
+else:
+    print(f"[*] Loading custom vehicle model: {vehicle_model_path}")
+vehicle_model = YOLO(str(vehicle_model_path))
 
-print(f"[*] Loading pretrained vehicle model: {vehicle_model_path}")
-vehicle_model = YOLO(vehicle_model_path)
+plate_model_path = project_root / "plate_best.pt"
+if not plate_model_path.exists():
+    # Try looking in runs directory
+    run_weights = project_root / "runs" / "detect" / "yolo26_plate" / "plate_detector" / "weights" / "best.pt"
+    if run_weights.exists():
+        plate_model_path = run_weights
+        print(f"[*] Custom license plate model not in root, loading from runs: {plate_model_path}")
+    else:
+        # Fallback to base model
+        plate_model_path = project_root / "yolo26n.pt"
+        print(f"[!] Custom license plate model not found. Falling back to base model: {plate_model_path}")
+else:
+    print(f"[*] Loading custom license plate model: {plate_model_path}")
+plate_model = YOLO(str(plate_model_path))
 
-print(f"[*] Loading custom license plate model: {plate_model_path}")
-plate_model = YOLO(plate_model_path)
-
-# Initialize EasyOCR Reader
-print("[*] Initializing EasyOCR Reader...")
+# Initialize OCR Reader (Prefer PaddleOCR, fall back to EasyOCR)
 import torch
-import easyocr
 use_gpu = torch.cuda.is_available()
-print(f"[*] EasyOCR GPU acceleration: {use_gpu}")
-easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
-print("[*] EasyOCR Reader initialized successfully!")
+ocr_backend = None
+paddle_reader = None
+easyocr_reader = None
+
+try:
+    print("[*] Attempting to initialize PaddleOCR...")
+    from paddleocr import PaddleOCR
+    # use_textline_orientation instead of use_angle_cls (deprecated)
+    # device='gpu'/'cpu' instead of use_gpu (unknown argument in newer versions)
+    paddle_reader = PaddleOCR(use_textline_orientation=True, lang='en', device='gpu' if use_gpu else 'cpu')
+    ocr_backend = "paddle"
+    print("[*] PaddleOCR Reader initialized successfully!")
+except Exception as e_paddle:
+    print(f"[!] Failed to initialize PaddleOCR: {e_paddle}")
+    try:
+        print("[*] Falling back to EasyOCR...")
+        import easyocr
+        easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+        ocr_backend = "easyocr"
+        print("[*] EasyOCR Reader initialized successfully!")
+    except Exception as e_easy:
+        print(f"[!] Failed to initialize EasyOCR: {e_easy}")
 
 # Map COCO classes to our custom dashboard class indices
 # COCO classes: 2: car, 3: motorcycle, 5: bus, 7: truck
@@ -256,7 +287,11 @@ def preprocess_easyocr(crop):
         print(f"[!] Error in preprocess_easyocr: {e}")
         return crop
 
-def perform_ocr_easyocr(plate_crop, is_square):
+def perform_ocr(plate_crop, is_square):
+    global ocr_backend, paddle_reader, easyocr_reader
+    if ocr_backend is None:
+        return None
+        
     try:
         if plate_crop is None or plate_crop.size == 0:
             return None
@@ -265,35 +300,65 @@ def perform_ocr_easyocr(plate_crop, is_square):
         plate_crop = deskew_plate(plate_crop)
         plate_crop = preprocess_easyocr(plate_crop)
         
-        # Convert BGR to RGB for EasyOCR
+        # Convert BGR to RGB
         plate_rgb = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2RGB)
         
-        # Run EasyOCR
-        results = easyocr_reader.readtext(plate_rgb)
-        if not results:
+        if ocr_backend == "paddle":
+            # Run PaddleOCR
+            ocr_res = paddle_reader.ocr(plate_rgb, cls=True)
+            if not ocr_res or not ocr_res[0]:
+                return None
+                
+            results = ocr_res[0]
+            # Sort results top-to-bottom, then left-to-right.
+            results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
+            
+            texts = []
+            # If we have multiple blocks, treat them as top/bottom lines of square plate
+            if is_square and len(results_sorted) >= 2:
+                top_raw = results_sorted[0][1][0]
+                bottom_raw = results_sorted[1][1][0]
+                top_clean = correct_plate_string(top_raw, is_top_line=True)
+                bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
+                if top_clean or bottom_clean:
+                    raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
+                    return format_vietnamese_plate(raw_plate)
+            
+            # Fallback or single block
+            for res in results_sorted:
+                text = res[1][0]
+                cleaned = "".join([c for c in text if c.isalnum()]).upper()
+                if cleaned:
+                    texts.append(cleaned)
+                    
+        elif ocr_backend == "easyocr":
+            # Run EasyOCR
+            results = easyocr_reader.readtext(plate_rgb)
+            if not results:
+                return None
+                
+            results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
+            
+            texts = []
+            # If we have multiple blocks, treat them as top/bottom lines of square plate
+            if is_square and len(results_sorted) >= 2:
+                top_raw = results_sorted[0][1]
+                bottom_raw = results_sorted[1][1]
+                top_clean = correct_plate_string(top_raw, is_top_line=True)
+                bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
+                if top_clean or bottom_clean:
+                    raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
+                    return format_vietnamese_plate(raw_plate)
+            
+            # Fallback or single block
+            for res in results_sorted:
+                text = res[1]
+                cleaned = "".join([c for c in text if c.isalnum()]).upper()
+                if cleaned:
+                    texts.append(cleaned)
+        else:
             return None
             
-        # Sort results top-to-bottom, then left-to-right
-        results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
-        
-        texts = []
-        # If we have multiple blocks, treat them as top/bottom lines of square plate
-        if is_square and len(results_sorted) >= 2:
-            top_raw = results_sorted[0][1]
-            bottom_raw = results_sorted[1][1]
-            top_clean = correct_plate_string(top_raw, is_top_line=True)
-            bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
-            if top_clean or bottom_clean:
-                raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
-                return format_vietnamese_plate(raw_plate)
-        
-        # Fallback or single block
-        for res in results_sorted:
-            text = res[1]
-            cleaned = "".join([c for c in text if c.isalnum()]).upper()
-            if cleaned:
-                texts.append(cleaned)
-                
         if not texts:
             return None
             
@@ -301,7 +366,7 @@ def perform_ocr_easyocr(plate_crop, is_square):
         corrected = correct_plate_string(combined)
         return format_vietnamese_plate(corrected)
     except Exception as e:
-        print(f"[!] EasyOCR Exception: {e}")
+        print(f"[!] OCR Exception ({ocr_backend}): {e}")
         return None
 
 
@@ -373,8 +438,11 @@ def gen_frames(video_id):
                     track_id = track_ids[idx]
                     
                     # Check confidence threshold and if the class is a vehicle (car, motorcycle, truck, bus)
-                    if confidence > 0.30 and raw_cls_id in COCO_MAP:
-                        mapped_cls_id = COCO_MAP[raw_cls_id]
+                    is_coco = (len(vehicle_model.names) > 10)
+                    is_vehicle = (raw_cls_id in COCO_MAP) if is_coco else (raw_cls_id in [0, 1, 2, 3])
+                    
+                    if confidence > 0.30 and is_vehicle:
+                        mapped_cls_id = COCO_MAP[raw_cls_id] if is_coco else raw_cls_id
                         
                         # Apply class smoothing using majority voting based on track_id
                         if track_id is not None:
@@ -472,8 +540,8 @@ def gen_frames(video_id):
                                     if plate_no is None:
                                         # Crop the plate from original frame for OCR
                                         plate_crop = frame[py1:py2, px1:px2]
-                                        # Căn chỉnh góc nghiêng và nhận diện chữ bằng EasyOCR
-                                        plate_no = perform_ocr_easyocr(plate_crop, is_square)
+                                        # Căn chỉnh góc nghiêng và nhận diện chữ bằng OCR (Paddle/EasyOCR)
+                                        plate_no = perform_ocr(plate_crop, is_square)
                                             
                                         # Tắt cơ chế giả lập biển số: hiển thị N/A nếu OCR thất bại
                                         if not plate_no:
