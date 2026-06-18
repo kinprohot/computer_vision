@@ -26,7 +26,7 @@ def run_inference(model_path, source_path, output_dir="runs/detect/inference_res
     
     # Run prediction
     print(f"Running prediction on: {source_path}...")
-    results = model(source_path)
+    results = model(source_path, conf=0.35)
     
     for i, result in enumerate(results):
         img = result.orig_img.copy()

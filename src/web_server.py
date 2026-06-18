@@ -476,8 +476,8 @@ def gen_frames(video_id):
                             # Crop the vehicle from original frame
                             vehicle_crop = frame[y1:y2, x1:x2]
                             if vehicle_crop.size > 0:
-                                # Run plate detector on crop (using imgsz=160 for fast inference on small crops)
-                                plate_crop_results = plate_model(vehicle_crop, verbose=False, imgsz=160)
+                                # Run plate detector on crop (using imgsz=320 for better accuracy on details)
+                                plate_crop_results = plate_model(vehicle_crop, verbose=False, imgsz=320)
                                 plate_boxes = plate_crop_results[0].boxes
                                 
                                 best_plate_box = None
@@ -488,8 +488,8 @@ def gen_frames(video_id):
                                         best_plate_conf = pconf
                                         best_plate_box = pbox
                                 
-                                # If a license plate is found with confidence > 0.20
-                                if best_plate_box is not None and best_plate_conf > 0.20:
+                                # If a license plate is found with confidence > 0.45
+                                if best_plate_box is not None and best_plate_conf > 0.45:
                                     px1_c, py1_c, px2_c, py2_c = map(int, best_plate_box.xyxy[0].tolist())
                                     
                                     # Convert relative coordinates to absolute coordinates on main frame
