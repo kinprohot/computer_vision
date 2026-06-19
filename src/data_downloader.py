@@ -11,7 +11,18 @@ def get_live_stream_url(youtube_url):
     ydl_opts = {
         'format': 'best',  # Get best quality available
         'quiet': True,
+        'js_runtimes': {
+            'node': {}
+        },
+        'remote_components': {'ejs:github'}
     }
+    project_root = Path(__file__).resolve().parent.parent
+    cookies_path = project_root / 'cookies.txt'
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+    elif Path('cookies.txt').exists():
+        ydl_opts['cookiefile'] = 'cookies.txt'
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(youtube_url, download=False)
         stream_url = info.get('url')
@@ -26,7 +37,18 @@ def download_youtube_video(url, output_path="temp_video.mp4"):
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': output_path,
         'quiet': True,
+        'js_runtimes': {
+            'node': {}
+        },
+        'remote_components': {'ejs:github'}
     }
+    project_root = Path(__file__).resolve().parent.parent
+    cookies_path = project_root / 'cookies.txt'
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+    elif Path('cookies.txt').exists():
+        ydl_opts['cookiefile'] = 'cookies.txt'
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     print(f"Download completed! Saved to: {output_path}")

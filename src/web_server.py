@@ -118,7 +118,18 @@ def get_hls_url(video_id):
     ydl_opts = {
         'format': 'best',
         'quiet': True,
+        'js_runtimes': {
+            'node': {}
+        },
+        'remote_components': {'ejs:github'}
     }
+    project_root = Path(__file__).resolve().parent.parent
+    cookies_path = project_root / 'cookies.txt'
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+    elif Path('cookies.txt').exists():
+        ydl_opts['cookiefile'] = 'cookies.txt'
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(youtube_url, download=False)
         stream_url = info.get('url')
