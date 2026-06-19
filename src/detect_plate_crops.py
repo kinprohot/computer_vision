@@ -137,101 +137,121 @@ def verify_plate_crop(context_img, plate_box, plate_model, filter_threshold=0.55
         print(f"[!] Verification failed: {e}")
     return False
 
+def _detect_plates_in_vehicle(vehicle_crop, vx1, vy1, plate_model, detect_threshold):
+    """Detect plates inside a vehicle crop and return candidate coordinates."""
+    candidates = []
+    if vehicle_crop.size == 0:
+        return candidates
+    plate_results = plate_model(vehicle_crop, verbose=False, imgsz=320)
+    plate_boxes = plate_results[0].boxes
+    if plate_boxes is None:
+        return candidates
+    for pbox in plate_boxes:
+        pconf = pbox.conf[0].item()
+        if pconf >= detect_threshold:
+            px1_c, py1_c, px2_c, py2_c = map(int, pbox.xyxy[0].tolist())
+            candidates.append((px1_c, py1_c, px2_c, py2_c, vehicle_crop, vx1, vy1))
+    return candidates
+
+def _detect_cascade(img, vehicle_model, plate_model, detect_threshold):
+    """Run cascade detection: first detect vehicles, then plates within vehicles."""
+    h_orig, w_orig = img.shape[:2]
+    candidates = []
+    vehicle_results = vehicle_model(img, verbose=False, imgsz=320)
+    vehicle_boxes = vehicle_results[0].boxes
+    if vehicle_boxes is None:
+        return candidates
+
+    for box in vehicle_boxes:
+        cls_id = int(box.cls[0].item())
+        conf = box.conf[0].item()
+        if conf < 0.35 or cls_id not in [0, 1, 2, 3]:
+            continue
+        
+        vx1, vy1, vx2, vy2 = map(int, box.xyxy[0].tolist())
+        vx1, vy1 = max(0, vx1), max(0, vy1)
+        vx2, vy2 = min(w_orig, vx2), min(h_orig, vy2)
+        
+        vw, vh = vx2 - vx1, vy2 - vy1
+        if vw > 40 and vh > 40:
+            vehicle_crop = img[vy1:vy2, vx1:vx2]
+            candidates.extend(
+                _detect_plates_in_vehicle(vehicle_crop, vx1, vy1, plate_model, detect_threshold)
+            )
+    return candidates
+
+def _detect_plate_direct(img, plate_model, detect_threshold):
+    """Directly detect plates on the input image."""
+    candidates = []
+    plate_results = plate_model(img, verbose=False, imgsz=640)
+    plate_boxes = plate_results[0].boxes
+    if plate_boxes is None:
+        return candidates
+    for pbox in plate_boxes:
+        pconf = pbox.conf[0].item()
+        if pconf >= detect_threshold:
+            px1, py1, px2, py2 = map(int, pbox.xyxy[0].tolist())
+            candidates.append((px1, py1, px2, py2, img, 0, 0))
+    return candidates
+
+def _detect_vehicle_class4(img, vehicle_model, detect_threshold):
+    """Detect plates using vehicle class 4 logic."""
+    candidates = []
+    vehicle_results = vehicle_model(img, verbose=False, imgsz=320)
+    vehicle_boxes = vehicle_results[0].boxes
+    if vehicle_boxes is None:
+        return candidates
+    for box in vehicle_boxes:
+        cls_id = int(box.cls[0].item())
+        conf = box.conf[0].item()
+        if cls_id == 4 and conf >= detect_threshold:
+            px1, py1, px2, py2 = map(int, box.xyxy[0].tolist())
+            candidates.append((px1, py1, px2, py2, img, 0, 0))
+    return candidates
+
+def _filter_and_check_sharpness(img, candidates, plate_model, filter_threshold, min_sharpness):
+    """Run verification model and sharpness checks on plate candidates."""
+    h_orig, w_orig = img.shape[:2]
+    verified_plates = []
+    for px1_c, py1_c, px2_c, py2_c, context_img, offset_x, offset_y in candidates:
+        if not verify_plate_crop(context_img, (px1_c, py1_c, px2_c, py2_c), plate_model, filter_threshold):
+            continue
+            
+        px1 = max(0, offset_x + px1_c)
+        py1 = max(0, offset_y + py1_c)
+        px2 = min(w_orig, offset_x + px2_c)
+        py2 = min(h_orig, offset_y + py2_c)
+        
+        plate_crop = img[py1:py2, px1:px2]
+        if plate_crop.size == 0:
+            continue
+            
+        sharpness_val = calculate_sharpness(plate_crop)
+        if sharpness_val >= min_sharpness:
+            verified_plates.append((plate_crop, sharpness_val))
+        else:
+            print(f"      [Candidate Rejected] Blurry plate image (Sharpness: {sharpness_val:.1f} < {min_sharpness})")
+    return verified_plates
+
 def extract_plates_from_image(img, vehicle_model, plate_model, detect_type="cascade", detect_threshold=0.4, filter_threshold=0.55, min_sharpness=80.0):
     """
     Run detection on a single frame, crop plate candidates, verify using the filter model,
     check image sharpness (xử lý ảnh rõ nét), and return a list of verified clean plate crops.
     Returns list of tuples: (plate_crop, sharpness_value)
     """
-    h_orig, w_orig = img.shape[:2]
-    verified_plates = []
-    candidates = [] # list of (px1, py1, px2, py2, context_img, vx1, vy1)
-    
     if detect_type == "cascade":
-        # Step 1: Detect vehicles
-        vehicle_results = vehicle_model(img, verbose=False, imgsz=320)
-        vehicle_boxes = vehicle_results[0].boxes
-        
-        if vehicle_boxes is not None:
-            for box in vehicle_boxes:
-                cls_id = int(box.cls[0].item())
-                conf = box.conf[0].item()
-                
-                if conf >= 0.35 and cls_id in [0, 1, 2, 3]:
-                    vx1, vy1, vx2, vy2 = map(int, box.xyxy[0].tolist())
-                    vx1, vy1 = max(0, vx1), max(0, vy1)
-                    vx2, vy2 = min(w_orig, vx2), min(h_orig, vy2)
-                    
-                    vw, vh = vx2 - vx1, vy2 - vy1
-                    if vw > 40 and vh > 40:
-                        vehicle_crop = img[vy1:vy2, vx1:vx2]
-                        if vehicle_crop.size > 0:
-                            # Step 2: Detect plates inside vehicle crop
-                            plate_results = plate_model(vehicle_crop, verbose=False, imgsz=320)
-                            plate_boxes = plate_results[0].boxes
-                            
-                            if plate_boxes is not None:
-                                for pbox in plate_boxes:
-                                    pconf = pbox.conf[0].item()
-                                    if pconf >= detect_threshold:
-                                        px1_c, py1_c, px2_c, py2_c = map(int, pbox.xyxy[0].tolist())
-                                        candidates.append((px1_c, py1_c, px2_c, py2_c, vehicle_crop, vx1, vy1))
-                                            
+        candidates = _detect_cascade(img, vehicle_model, plate_model, detect_threshold)
     elif detect_type == "plate_direct":
-        plate_results = plate_model(img, verbose=False, imgsz=640)
-        plate_boxes = plate_results[0].boxes
-        
-        if plate_boxes is not None:
-            for pbox in plate_boxes:
-                pconf = pbox.conf[0].item()
-                if pconf >= detect_threshold:
-                    px1, py1, px2, py2 = map(int, pbox.xyxy[0].tolist())
-                    candidates.append((px1, py1, px2, py2, img, 0, 0))
-                        
+        candidates = _detect_plate_direct(img, plate_model, detect_threshold)
     elif detect_type == "vehicle_class4":
-        vehicle_results = vehicle_model(img, verbose=False, imgsz=320)
-        vehicle_boxes = vehicle_results[0].boxes
+        candidates = _detect_vehicle_class4(img, vehicle_model, detect_threshold)
+    else:
+        candidates = []
         
-        if vehicle_boxes is not None:
-            for box in vehicle_boxes:
-                cls_id = int(box.cls[0].item())
-                conf = box.conf[0].item()
-                if cls_id == 4 and conf >= detect_threshold:
-                    px1, py1, px2, py2 = map(int, box.xyxy[0].tolist())
-                    candidates.append((px1, py1, px2, py2, img, 0, 0))
+    return _filter_and_check_sharpness(img, candidates, plate_model, filter_threshold, min_sharpness)
 
-    # Step 3: Run filtering model and sharpness checks on all candidate crops
-    for px1_c, py1_c, px2_c, py2_c, context_img, offset_x, offset_y in candidates:
-        if verify_plate_crop(context_img, (px1_c, py1_c, px2_c, py2_c), plate_model, filter_threshold):
-            # Calculate global coordinates for final crop
-            px1 = offset_x + px1_c
-            py1 = offset_y + py1_c
-            px2 = offset_x + px2_c
-            py2 = offset_y + py2_c
-            
-            px1, py1 = max(0, px1), max(0, py1)
-            px2, py2 = min(w_orig, px2), min(h_orig, py2)
-            
-            plate_crop = img[py1:py2, px1:px2]
-            if plate_crop.size > 0:
-                # Sharpness check
-                sharpness_val = calculate_sharpness(plate_crop)
-                if sharpness_val >= min_sharpness:
-                    verified_plates.append((plate_crop, sharpness_val))
-                else:
-                    print(f"      [Candidate Rejected] Blurry plate image (Sharpness: {sharpness_val:.1f} < {min_sharpness})")
-            
-    return verified_plates
-
-def run_plate_extraction(source="youtube", detect_type="cascade", detect_threshold=0.35, filter_threshold=0.5, 
-                         max_frames=200, interval_seconds=10.0, min_sharpness=80.0):
-    """
-    Main runner function.
-    Loads models, loops through sources, and extracts sharp verified plate crops.
-    """
-    project_root = Path(__file__).resolve().parent.parent
-    
-    # 1. Load YOLO models
+def _load_models(project_root):
+    """Load YOLO models for vehicle and plate detection."""
     print("[*] Loading models...")
     vehicle_model_path = project_root / "vehicle_best.pt"
     if not vehicle_model_path.exists():
@@ -251,6 +271,195 @@ def run_plate_extraction(source="youtube", detect_type="cascade", detect_thresho
         print(f"[*] Loaded plate detector model: {plate_model_path}")
     plate_model = YOLO(str(plate_model_path))
     
+    return vehicle_model, plate_model
+
+def _get_dataset_split_dir(img_path, output_dir):
+    """Determine the subdirectory based on image split directory names."""
+    parent_name = img_path.parent.name
+    grandparent_name = img_path.parent.parent.name
+    
+    if parent_name in ["train", "val", "test"]:
+        return output_dir / "dataset" / parent_name
+    if grandparent_name in ["train", "val", "test"]:
+        return output_dir / "dataset" / grandparent_name
+    return output_dir / "dataset"
+
+def _process_dataset(project_root, output_dir, vehicle_model, plate_model, detect_type, detect_threshold, filter_threshold, min_sharpness):
+    """Process all dataset images and extract plate crops."""
+    print("\n=== Processing Dataset Images ===")
+    dataset_path = project_root / "dataset"
+    if not dataset_path.exists():
+        print(f"[!] Dataset path does not exist: {dataset_path}")
+        return
+        
+    image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
+    image_paths = []
+    for ext in image_extensions:
+        image_paths.extend(dataset_path.rglob(ext))
+        
+    total_images = len(image_paths)
+    print(f"[*] Found {total_images} images in dataset.")
+    
+    saved_count = 0
+    for idx, img_path in enumerate(image_paths, 1):
+        split_out_dir = _get_dataset_split_dir(img_path, output_dir)
+        split_out_dir.mkdir(parents=True, exist_ok=True)
+        
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
+            
+        verified_plates = extract_plates_from_image(
+            img, vehicle_model, plate_model, 
+            detect_type=detect_type, 
+            detect_threshold=detect_threshold, 
+            filter_threshold=filter_threshold,
+            min_sharpness=min_sharpness
+        )
+        
+        for p_idx, (plate, sharp_val) in enumerate(verified_plates):
+            filename = f"plate_{img_path.stem}_{p_idx}_s{int(sharp_val)}.jpg"
+            cv2.imwrite(str(split_out_dir / filename), plate)
+            saved_count += 1
+            
+        if idx % 10 == 0 or idx == total_images:
+            print(f"[*] Dataset progress: {idx}/{total_images} images processed. Saved {saved_count} plates so far.")
+            
+    print(f"[✓] Finished Dataset: Processed {total_images} images. Extracted & saved {saved_count} verified plates.")
+
+def _process_live_stream(camera, stream_url, cam_out_dir, vehicle_model, plate_model, detect_type, detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness):
+    """Process a live stream using FreshFrameReader."""
+    cam_title = camera["title"].replace(" ", "_")
+    print(f"[*] Starting background frame grabber for live stream: {camera['title']}")
+    reader = FreshFrameReader(stream_url)
+    time.sleep(2.0)
+    
+    processed_count = 0
+    cam_saved_count = 0
+    print(f"[*] Processing {camera['title']}: capturing {max_frames} frames with {interval_seconds}s intervals...")
+    
+    while processed_count < max_frames:
+        success, frame = reader.read()
+        if not success:
+            print(f"[!] Stream ended or frame grabber failed for {camera['title']}.")
+            break
+            
+        verified_plates = extract_plates_from_image(
+            frame, vehicle_model, plate_model, 
+            detect_type=detect_type, 
+            detect_threshold=detect_threshold, 
+            filter_threshold=filter_threshold,
+            min_sharpness=min_sharpness
+        )
+        
+        for p_idx, (plate, sharp_val) in enumerate(verified_plates):
+            filename = f"plate_{cam_title}_cap{processed_count}_{p_idx}_s{int(sharp_val)}.jpg"
+            cv2.imwrite(str(cam_out_dir / filename), plate)
+            cam_saved_count += 1
+            print(f"      [Plate Saved] {filename} (Sharpness: {sharp_val:.1f})")
+            
+        processed_count += 1
+        if processed_count % 5 == 0 or processed_count == max_frames:
+            print(f"    - {camera['title']}: processed {processed_count}/{max_frames} frames. Saved {cam_saved_count} plates.")
+            
+        if processed_count < max_frames:
+            time.sleep(interval_seconds)
+            
+    reader.release()
+    print(f"[✓] Finished LIVE {camera['title']}: processed {processed_count} frames, saved {cam_saved_count} verified plates.")
+
+def _process_vod_stream(camera, stream_url, cam_out_dir, vehicle_model, plate_model, detect_type, detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness):
+    """Process a VOD stream by seeking forward to skip time."""
+    cam_title = camera["title"].replace(" ", "_")
+    cap = cv2.VideoCapture(stream_url)
+    if not cap.isOpened():
+        print(f"[!] Could not open VOD VideoCapture for {camera['title']}. Skipping.")
+        return
+        
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 30.0
+        
+    frame_step = int(fps * interval_seconds)
+    processed_count = 0
+    cam_saved_count = 0
+    frame_idx = 0
+    
+    print(f"[*] Processing VOD {camera['title']}: capturing {max_frames} frames, jumping {interval_seconds}s ({frame_step} frames) forward each step...")
+    
+    while processed_count < max_frames:
+        if frame_idx > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            
+        success, frame = cap.read()
+        if not success:
+            break
+            
+        verified_plates = extract_plates_from_image(
+            frame, vehicle_model, plate_model, 
+            detect_type=detect_type, 
+            detect_threshold=detect_threshold, 
+            filter_threshold=filter_threshold,
+            min_sharpness=min_sharpness
+        )
+        
+        for p_idx, (plate, sharp_val) in enumerate(verified_plates):
+            filename = f"plate_{cam_title}_f{frame_idx}_{p_idx}_s{int(sharp_val)}.jpg"
+            cv2.imwrite(str(cam_out_dir / filename), plate)
+            cam_saved_count += 1
+            print(f"      [Plate Saved] {filename} (Sharpness: {sharp_val:.1f})")
+            
+        processed_count += 1
+        frame_idx += frame_step
+        
+        if processed_count % 10 == 0 or processed_count == max_frames:
+            print(f"    - {camera['title']}: processed {processed_count}/{max_frames} frames. Saved {cam_saved_count} plates.")
+            
+    cap.release()
+    print(f"[✓] Finished VOD {camera['title']}: processed {processed_count} frames, saved {cam_saved_count} verified plates.")
+
+def _process_youtube_streams(output_dir, vehicle_model, plate_model, detect_type, detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness):
+    """Process all configured YouTube camera streams."""
+    print("\n=== Processing YouTube Camera Streams ===")
+    youtube_out_dir = output_dir / "youtube"
+    youtube_out_dir.mkdir(parents=True, exist_ok=True)
+    
+    for camera in STREAMS:
+        cam_title = camera["title"].replace(" ", "_")
+        cam_id = camera["id"]
+        cam_out_dir = youtube_out_dir / cam_title
+        cam_out_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\n[*] Connecting to {camera['title']} (ID: {cam_id})...")
+        stream_url, is_live = get_stream_info(cam_id)
+        if not stream_url:
+            print(f"[!] Could not retrieve stream URL for {camera['title']}. Skipping.")
+            continue
+            
+        print(f"[*] Stream Type: {'LIVE' if is_live else 'VOD'}")
+        
+        if is_live:
+            _process_live_stream(
+                camera, stream_url, cam_out_dir, vehicle_model, plate_model,
+                detect_type, detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness
+            )
+        else:
+            _process_vod_stream(
+                camera, stream_url, cam_out_dir, vehicle_model, plate_model,
+                detect_type, detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness
+            )
+
+def run_plate_extraction(source="youtube", detect_type="cascade", detect_threshold=0.35, filter_threshold=0.5, 
+                         max_frames=200, interval_seconds=10.0, min_sharpness=80.0):
+    """
+    Main runner function.
+    Loads models, loops through sources, and extracts sharp verified plate crops.
+    """
+    project_root = Path(__file__).resolve().parent.parent
+    
+    # 1. Load YOLO models
+    vehicle_model, plate_model = _load_models(project_root)
+    
     # Define output directories
     output_dir = project_root / "runs" / "detect" / "extracted_plates"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -259,166 +468,17 @@ def run_plate_extraction(source="youtube", detect_type="cascade", detect_thresho
     
     # ==================== PROCESS DATASET IMAGES ====================
     if source in ["dataset", "both"]:
-        print("\n=== Processing Dataset Images ===")
-        dataset_path = project_root / "dataset"
-        if not dataset_path.exists():
-            print(f"[!] Dataset path does not exist: {dataset_path}")
-        else:
-            image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
-            image_paths = []
-            for ext in image_extensions:
-                image_paths.extend(dataset_path.rglob(ext))
-                
-            total_images = len(image_paths)
-            print(f"[*] Found {total_images} images in dataset.")
-            
-            saved_count = 0
-            for idx, img_path in enumerate(image_paths, 1):
-                parent_name = img_path.parent.name
-                grandparent_name = img_path.parent.parent.name
-                
-                if parent_name in ["train", "val", "test"]:
-                    split_out_dir = output_dir / "dataset" / parent_name
-                elif grandparent_name in ["train", "val", "test"]:
-                    split_out_dir = output_dir / "dataset" / grandparent_name
-                else:
-                    split_out_dir = output_dir / "dataset"
-                    
-                split_out_dir.mkdir(parents=True, exist_ok=True)
-                
-                img = cv2.imread(str(img_path))
-                if img is None:
-                    continue
-                    
-                verified_plates = extract_plates_from_image(
-                    img, vehicle_model, plate_model, 
-                    detect_type=detect_type, 
-                    detect_threshold=detect_threshold, 
-                    filter_threshold=filter_threshold,
-                    min_sharpness=min_sharpness
-                )
-                
-                for p_idx, (plate, sharp_val) in enumerate(verified_plates):
-                    filename = f"plate_{img_path.stem}_{p_idx}_s{int(sharp_val)}.jpg"
-                    cv2.imwrite(str(split_out_dir / filename), plate)
-                    saved_count += 1
-                    
-                if idx % 10 == 0 or idx == total_images:
-                    print(f"[*] Dataset progress: {idx}/{total_images} images processed. Saved {saved_count} plates so far.")
-            
-            print(f"[✓] Finished Dataset: Processed {total_images} images. Extracted & saved {saved_count} verified plates.")
+        _process_dataset(
+            project_root, output_dir, vehicle_model, plate_model,
+            detect_type, detect_threshold, filter_threshold, min_sharpness
+        )
             
     # ==================== PROCESS YOUTUBE CAMERA STREAMS ====================
     if source in ["youtube", "both"]:
-        print("\n=== Processing YouTube Camera Streams ===")
-        youtube_out_dir = output_dir / "youtube"
-        youtube_out_dir.mkdir(parents=True, exist_ok=True)
-        
-        for camera in STREAMS:
-            cam_title = camera["title"].replace(" ", "_")
-            cam_id = camera["id"]
-            cam_out_dir = youtube_out_dir / cam_title
-            cam_out_dir.mkdir(parents=True, exist_ok=True)
-            
-            print(f"\n[*] Connecting to {camera['title']} (ID: {cam_id})...")
-            stream_url, is_live = get_stream_info(cam_id)
-            if not stream_url:
-                print(f"[!] Could not retrieve stream URL for {camera['title']}. Skipping.")
-                continue
-                
-            print(f"[*] Stream Type: {'LIVE' if is_live else 'VOD'}")
-            
-            if is_live:
-                # For LIVE streams, read frames in real-time to avoid lag
-                print(f"[*] Starting background frame grabber for live stream: {camera['title']}")
-                reader = FreshFrameReader(stream_url)
-                # Wait 2 seconds to initialize thread and buffer first frame
-                time.sleep(2.0)
-                
-                processed_count = 0
-                cam_saved_count = 0
-                
-                print(f"[*] Processing {camera['title']}: capturing {max_frames} frames with {interval_seconds}s intervals...")
-                
-                while processed_count < max_frames:
-                    success, frame = reader.read()
-                    if not success:
-                        print(f"[!] Stream ended or frame grabber failed for {camera['title']}.")
-                        break
-                        
-                    verified_plates = extract_plates_from_image(
-                        frame, vehicle_model, plate_model, 
-                        detect_type=detect_type, 
-                        detect_threshold=detect_threshold, 
-                        filter_threshold=filter_threshold,
-                        min_sharpness=min_sharpness
-                    )
-                    
-                    for p_idx, (plate, sharp_val) in enumerate(verified_plates):
-                        filename = f"plate_{cam_title}_cap{processed_count}_{p_idx}_s{int(sharp_val)}.jpg"
-                        cv2.imwrite(str(cam_out_dir / filename), plate)
-                        cam_saved_count += 1
-                        print(f"      [Plate Saved] {filename} (Sharpness: {sharp_val:.1f})")
-                        
-                    processed_count += 1
-                    if processed_count % 5 == 0 or processed_count == max_frames:
-                        print(f"    - {camera['title']}: processed {processed_count}/{max_frames} frames. Saved {cam_saved_count} plates.")
-                        
-                    # Sleep for the interval before capturing the next frame
-                    if processed_count < max_frames:
-                        time.sleep(interval_seconds)
-                        
-                reader.release()
-                print(f"[✓] Finished LIVE {camera['title']}: processed {processed_count} frames, saved {cam_saved_count} verified plates.")
-                
-            else:
-                # For VOD (offline videos), fast-forward by seeking to skip waiting in real-time!
-                cap = cv2.VideoCapture(stream_url)
-                if not cap.isOpened():
-                    print(f"[!] Could not open VOD VideoCapture for {camera['title']}. Skipping.")
-                    continue
-                    
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                if fps <= 0:
-                    fps = 30.0
-                    
-                frame_step = int(fps * interval_seconds)
-                processed_count = 0
-                cam_saved_count = 0
-                frame_idx = 0
-                
-                print(f"[*] Processing VOD {camera['title']}: capturing {max_frames} frames, jumping {interval_seconds}s ({frame_step} frames) forward each step...")
-                
-                while processed_count < max_frames:
-                    if frame_idx > 0:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                        
-                    success, frame = cap.read()
-                    if not success:
-                        break
-                        
-                    verified_plates = extract_plates_from_image(
-                        frame, vehicle_model, plate_model, 
-                        detect_type=detect_type, 
-                        detect_threshold=detect_threshold, 
-                        filter_threshold=filter_threshold,
-                        min_sharpness=min_sharpness
-                    )
-                    
-                    for p_idx, (plate, sharp_val) in enumerate(verified_plates):
-                        filename = f"plate_{cam_title}_f{frame_idx}_{p_idx}_s{int(sharp_val)}.jpg"
-                        cv2.imwrite(str(cam_out_dir / filename), plate)
-                        cam_saved_count += 1
-                        print(f"      [Plate Saved] {filename} (Sharpness: {sharp_val:.1f})")
-                        
-                    processed_count += 1
-                    frame_idx += frame_step
-                    
-                    if processed_count % 10 == 0 or processed_count == max_frames:
-                        print(f"    - {camera['title']}: processed {processed_count}/{max_frames} frames. Saved {cam_saved_count} plates.")
-                        
-                cap.release()
-                print(f"[✓] Finished VOD {camera['title']}: processed {processed_count} frames, saved {cam_saved_count} verified plates.")
+        _process_youtube_streams(
+            output_dir, vehicle_model, plate_model, detect_type,
+            detect_threshold, filter_threshold, max_frames, interval_seconds, min_sharpness
+        )
             
     total_time = time.time() - start_time
     print(f"\n[✓] All tasks finished in {total_time:.2f} seconds.")

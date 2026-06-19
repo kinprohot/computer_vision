@@ -5,6 +5,9 @@ import time
 import random
 from pathlib import Path
 
+# Constant for cookie filename used by yt-dlp
+COOKIE_FILE = "cookies.txt"
+
 def get_live_stream_url(youtube_url):
     """Get direct HLS stream URL (.m3u8) from YouTube Live Stream without downloading the file."""
     print(f"Analyzing YouTube link: {youtube_url}...")
@@ -17,11 +20,11 @@ def get_live_stream_url(youtube_url):
         'remote_components': {'ejs:github'}
     }
     project_root = Path(__file__).resolve().parent.parent
-    cookies_path = project_root / 'cookies.txt'
+    cookies_path = project_root / COOKIE_FILE
     if cookies_path.exists():
         ydl_opts['cookiefile'] = str(cookies_path)
-    elif Path('cookies.txt').exists():
-        ydl_opts['cookiefile'] = 'cookies.txt'
+    elif Path(COOKIE_FILE).exists():
+        ydl_opts['cookiefile'] = COOKIE_FILE
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(youtube_url, download=False)
@@ -43,16 +46,40 @@ def download_youtube_video(url, output_path="temp_video.mp4"):
         'remote_components': {'ejs:github'}
     }
     project_root = Path(__file__).resolve().parent.parent
-    cookies_path = project_root / 'cookies.txt'
+    cookies_path = project_root / COOKIE_FILE
     if cookies_path.exists():
         ydl_opts['cookiefile'] = str(cookies_path)
-    elif Path('cookies.txt').exists():
-        ydl_opts['cookiefile'] = 'cookies.txt'
+    elif Path(COOKIE_FILE).exists():
+        ydl_opts['cookiefile'] = COOKIE_FILE
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     print(f"Download completed! Saved to: {output_path}")
     return output_path
+
+
+def _choose_destination(r, train_dir, val_dir, test_dir, val_ratio, test_ratio):
+    """Return destination dir and human-friendly split name based on random value."""
+    if r < 1.0 - val_ratio - test_ratio:
+        return train_dir, "training"
+    if r < 1.0 - test_ratio:
+        return val_dir, "validation"
+    return test_dir, "testing"
+
+
+def _try_show_frame(frame):
+    """Attempt to show a preview window; return True when user requested quit.
+
+    Swallows cv2 errors when running in headless environments.
+    """
+    try:
+        cv2.imshow('YouTube Live Stream - Press q to quit', cv2.resize(frame, (854, 480)))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return True
+    except cv2.error:
+        # Headless environment: ignore
+        pass
+    return False
 
 def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=300, interval_seconds=2.0, val_ratio=0.08, test_ratio=0.12):
     """Read HLS Live stream URL and capture frames in real-time."""
@@ -88,48 +115,35 @@ def capture_from_live_stream(stream_url, output_dir, capture_duration_seconds=30
             if not ret:
                 print("Error: Failed to grab frame or stream disconnected.")
                 break
-                
+
             current_time = time.time()
             elapsed_time = current_time - start_time
-            
+
             # Check duration limit
             if elapsed_time > capture_duration_seconds:
                 print(f"Duration limit reached ({capture_duration_seconds}s). Stopping capture.")
                 break
-                
+
             # Capture frame based on interval
             if current_time - last_saved_time >= interval_seconds:
                 r = random.random()
-                if r < 1.0 - val_ratio - test_ratio:
-                    dest_dir = train_img_dir
-                    split_name = "training"
-                elif r < 1.0 - test_ratio:
-                    dest_dir = val_img_dir
-                    split_name = "validation"
-                else:
-                    dest_dir = test_img_dir
-                    split_name = "testing"
-                
+                dest_dir, split_name = _choose_destination(r, train_img_dir, val_img_dir, test_img_dir, val_ratio, test_ratio)
+
                 # Use timestamp for unique file names
                 timestamp = int(current_time * 1000)
                 img_name = f"live_frame_{timestamp}.jpg"
                 img_path = dest_dir / img_name
-                
+
                 cv2.imwrite(str(img_path), frame)
                 saved_count += 1
                 last_saved_time = current_time
                 print(f"[{int(elapsed_time)}s / {capture_duration_seconds}s] Saved frame {saved_count}: {img_name} to {split_name} set")
 
             # Show stream preview (can be disabled in headless servers)
-            try:
-                cv2.imshow('YouTube Live Stream - Press q to quit', cv2.resize(frame, (854, 480)))
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("User requested stop.")
-                    break
-            except cv2.error:
-                # If running on headless environment (no GUI window), cv2.imshow will fail
-                pass
-                
+            if _try_show_frame(frame):
+                print("User requested stop.")
+                break
+
     finally:
         cap.release()
         cv2.destroyAllWindows()

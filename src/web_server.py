@@ -208,6 +208,34 @@ def deskew_plate(plate_crop):
         print(f"[!] Deskew failed: {e}")
     return plate_crop
 
+def _correct_bottom_line(chars, letter_to_digit):
+    for i in range(len(chars)):
+        if chars[i] in letter_to_digit:
+            chars[i] = letter_to_digit[chars[i]]
+    return chars
+
+def _correct_top_line(chars, letter_to_digit, digit_to_letter):
+    for i in range(min(2, len(chars))):
+        if chars[i] in letter_to_digit:
+            chars[i] = letter_to_digit[chars[i]]
+    if len(chars) >= 3 and chars[2] in digit_to_letter:
+        chars[2] = digit_to_letter[chars[2]]
+    return chars
+
+def _correct_standard_line(chars, letter_to_digit, digit_to_letter):
+    if len(chars) >= 7:
+        for i in range(2):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+        if chars[2] in digit_to_letter:
+            chars[2] = digit_to_letter[chars[2]]
+            
+        num_digits = 5 if len(chars) >= 8 else 4
+        for i in range(len(chars) - num_digits, len(chars)):
+            if chars[i] in letter_to_digit:
+                chars[i] = letter_to_digit[chars[i]]
+    return chars
+
 def correct_plate_string(text, is_top_line=None, is_bottom_line=None):
     if not text:
         return text
@@ -227,32 +255,12 @@ def correct_plate_string(text, is_top_line=None, is_bottom_line=None):
     chars = list(text)
     
     if is_bottom_line:
-        for i in range(len(chars)):
-            if chars[i] in letter_to_digit:
-                chars[i] = letter_to_digit[chars[i]]
-        return "".join(chars)
+        chars = _correct_bottom_line(chars, letter_to_digit)
+    elif is_top_line:
+        chars = _correct_top_line(chars, letter_to_digit, digit_to_letter)
+    else:
+        chars = _correct_standard_line(chars, letter_to_digit, digit_to_letter)
         
-    if is_top_line:
-        for i in range(min(2, len(chars))):
-            if chars[i] in letter_to_digit:
-                chars[i] = letter_to_digit[chars[i]]
-        if len(chars) >= 3:
-            if chars[2] in digit_to_letter:
-                chars[2] = digit_to_letter[chars[2]]
-        return "".join(chars)
-        
-    if len(chars) >= 7:
-        for i in range(2):
-            if chars[i] in letter_to_digit:
-                chars[i] = letter_to_digit[chars[i]]
-        if chars[2] in digit_to_letter:
-            chars[2] = digit_to_letter[chars[2]]
-            
-        num_digits = 5 if len(chars) >= 8 else 4
-        for i in range(len(chars) - num_digits, len(chars)):
-            if chars[i] in letter_to_digit:
-                chars[i] = letter_to_digit[chars[i]]
-                
     return "".join(chars)
 
 def format_vietnamese_plate(plate_no):
@@ -298,8 +306,50 @@ def preprocess_easyocr(crop):
         print(f"[!] Error in preprocess_easyocr: {e}")
         return crop
 
-def perform_ocr(plate_crop, is_square):
+def _run_ocr_backend(plate_rgb):
     global ocr_backend, paddle_reader, easyocr_reader
+    if ocr_backend == "paddle":
+        ocr_res = paddle_reader.ocr(plate_rgb, cls=True)
+        if not ocr_res or not ocr_res[0]:
+            return None
+        return [(res[0], res[1][0]) for res in ocr_res[0]]
+        
+    if ocr_backend == "easyocr":
+        results = easyocr_reader.readtext(plate_rgb)
+        if not results:
+            return None
+        return [(res[0], res[1]) for res in results]
+        
+    return None
+
+def _process_square_plate(results_sorted):
+    if len(results_sorted) >= 2:
+        top_raw = results_sorted[0][1]
+        bottom_raw = results_sorted[1][1]
+        top_clean = correct_plate_string(top_raw, is_top_line=True)
+        bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
+        if top_clean or bottom_clean:
+            raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
+            return format_vietnamese_plate(raw_plate)
+    return None
+
+def _process_single_blocks(results_sorted):
+    texts = []
+    for res in results_sorted:
+        text = res[1]
+        cleaned = "".join([c for c in text if c.isalnum()]).upper()
+        if cleaned:
+            texts.append(cleaned)
+            
+    if not texts:
+        return None
+        
+    combined = "".join(texts)
+    corrected = correct_plate_string(combined)
+    return format_vietnamese_plate(corrected)
+
+def perform_ocr(plate_crop, is_square):
+    global ocr_backend
     if ocr_backend is None:
         return None
         
@@ -314,73 +364,208 @@ def perform_ocr(plate_crop, is_square):
         # Convert BGR to RGB
         plate_rgb = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2RGB)
         
-        if ocr_backend == "paddle":
-            # Run PaddleOCR
-            ocr_res = paddle_reader.ocr(plate_rgb, cls=True)
-            if not ocr_res or not ocr_res[0]:
-                return None
-                
-            results = ocr_res[0]
-            # Sort results top-to-bottom, then left-to-right.
-            results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
-            
-            texts = []
-            # If we have multiple blocks, treat them as top/bottom lines of square plate
-            if is_square and len(results_sorted) >= 2:
-                top_raw = results_sorted[0][1][0]
-                bottom_raw = results_sorted[1][1][0]
-                top_clean = correct_plate_string(top_raw, is_top_line=True)
-                bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
-                if top_clean or bottom_clean:
-                    raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
-                    return format_vietnamese_plate(raw_plate)
-            
-            # Fallback or single block
-            for res in results_sorted:
-                text = res[1][0]
-                cleaned = "".join([c for c in text if c.isalnum()]).upper()
-                if cleaned:
-                    texts.append(cleaned)
-                    
-        elif ocr_backend == "easyocr":
-            # Run EasyOCR
-            results = easyocr_reader.readtext(plate_rgb)
-            if not results:
-                return None
-                
-            results_sorted = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
-            
-            texts = []
-            # If we have multiple blocks, treat them as top/bottom lines of square plate
-            if is_square and len(results_sorted) >= 2:
-                top_raw = results_sorted[0][1]
-                bottom_raw = results_sorted[1][1]
-                top_clean = correct_plate_string(top_raw, is_top_line=True)
-                bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
-                if top_clean or bottom_clean:
-                    raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
-                    return format_vietnamese_plate(raw_plate)
-            
-            # Fallback or single block
-            for res in results_sorted:
-                text = res[1]
-                cleaned = "".join([c for c in text if c.isalnum()]).upper()
-                if cleaned:
-                    texts.append(cleaned)
-        else:
+        ocr_results = _run_ocr_backend(plate_rgb)
+        if not ocr_results:
             return None
             
-        if not texts:
-            return None
-            
-        combined = "".join(texts)
-        corrected = correct_plate_string(combined)
-        return format_vietnamese_plate(corrected)
+        results_sorted = sorted(ocr_results, key=lambda r: (r[0][0][1], r[0][0][0]))
+        
+        if is_square:
+            val = _process_square_plate(results_sorted)
+            if val is not None:
+                return val
+                
+        return _process_single_blocks(results_sorted)
     except Exception as e:
         print(f"[!] OCR Exception ({ocr_backend}): {e}")
         return None
 
+def _is_plate_yellow(plate_crop_temp):
+    if plate_crop_temp.size == 0:
+        return False
+    try:
+        hsv = cv2.cvtColor(plate_crop_temp, cv2.COLOR_BGR2HSV)
+        # Yellow color range in HSV: Hue [10, 35], Saturation [50, 255], Value [50, 255]
+        lower_yellow = np.array([10, 50, 50])
+        upper_yellow = np.array([35, 255, 255])
+        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        # If more than 15% of the plate is yellow, classify it as a yellow plate (bien vang)
+        return (np.count_nonzero(mask) / mask.size) > 0.15
+    except Exception:
+        return False
 
+def _get_cached_or_ocr_plate(track_id, frame, py1, py2, px1, px2, is_square):
+    current_time = time.time()
+    # Check tracking history cache first to completely eliminate text flickering
+    if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
+        # Keep valid plates cached for 10.0 seconds, but retry "N/A" after 1.5 seconds
+        cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
+        if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
+            return tracking_history[track_id]["plate_text"]
+            
+    # Crop the plate from original frame for OCR
+    plate_crop = frame[py1:py2, px1:px2]
+    # Căn chỉnh góc nghiêng và nhận diện chữ bằng OCR (Paddle/EasyOCR)
+    plate_no = perform_ocr(plate_crop, is_square)
+        
+    # Tắt cơ chế giả lập biển số: hiển thị N/A nếu OCR thất bại
+    if not plate_no:
+        plate_no = "N/A"
+        
+    # Save to tracking history cache
+    if track_id is not None:
+        tracking_history[track_id]["plate_text"] = plate_no
+        tracking_history[track_id]["plate_time"] = current_time
+        
+    return plate_no
+
+def _process_found_plate(best_plate_box, x1, y1, track_id, img, frame, counts, colors):
+    px1_c, py1_c, px2_c, py2_c = map(int, best_plate_box.xyxy[0].tolist())
+    
+    # Convert relative coordinates to absolute coordinates on main frame
+    px1 = x1 + px1_c
+    py1 = y1 + py1_c
+    px2 = x1 + px2_c
+    py2 = y1 + py2_c
+    
+    # The new model has 1 class (0: plate). Use Aspect Ratio and HSV color check.
+    pw = px2 - px1
+    ph = py2 - py1
+    ar = pw / ph if ph > 0 else 1.0
+    
+    # Standard Vietnamese square plate is 280x200 (AR ~1.4), long plate is 470x110 (AR ~4.27).
+    is_square = ar <= 1.7
+    
+    # Detect if yellow plate by checking color in HSV space on the plate crop
+    plate_crop_temp = frame[py1:py2, px1:px2]
+    is_yellow = _is_plate_yellow(plate_crop_temp)
+        
+    # Determine display color and label
+    plate_color = (0, 255, 255) if is_yellow else colors[4] # Yellow or Red box
+    
+    # Draw plate box
+    cv2.rectangle(img, (px1, py1), (px2, py2), plate_color, 2)
+    
+    plate_no = _get_cached_or_ocr_plate(track_id, frame, py1, py2, px1, px2, is_square)
+    
+    # Draw plate text overlay
+    plate_prefix = "Bien vang" if is_yellow else "Bien so"
+    plate_label = f"{plate_prefix}: {plate_no}"
+    cv2.putText(img, plate_label, (px1, max(py1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, plate_color, 1)
+    counts[4] += 1
+
+def _process_fallback_plate(x1, y1, x2, y2, w, h, track_id, mapped_cls_id, img, counts, colors):
+    if mapped_cls_id not in [0, 2, 3] or w <= 75 or h <= 75:
+        return
+        
+    plate_w = int(w * 0.32)
+    plate_h = int(h * 0.14)
+    plate_x = x1 + int(w * 0.5)
+    plate_y = y1 + int(h * 0.72)
+    
+    px1 = max(x1, plate_x - plate_w // 2)
+    py1 = max(y1, plate_y)
+    px2 = min(x2, plate_x + plate_w // 2)
+    py2 = min(y2, plate_y + plate_h)
+    
+    cv2.rectangle(img, (px1, py1), (px2, py2), colors[4], 1)
+    
+    current_time = time.time()
+    plate_no = None
+    
+    # Check tracking history cache for fallback
+    if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
+        cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
+        if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
+            plate_no = tracking_history[track_id]["plate_text"]
+            
+    if plate_no is None:
+        # Tắt cơ chế giả lập biển số cho ước lượng vùng biển: đặt mặc định là N/A
+        plate_no = "N/A"
+        if track_id is not None:
+            tracking_history[track_id]["plate_text"] = plate_no
+            tracking_history[track_id]["plate_time"] = current_time
+            
+    plate_label = f"Bien so: {plate_no}"
+    cv2.putText(img, plate_label, (px1, max(py1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, colors[4], 1)
+    counts[4] += 1
+
+def _detect_license_plate(x1, y1, x2, y2, w, h, track_id, mapped_cls_id, img, frame, counts, colors):
+    # Crop the vehicle from original frame
+    vehicle_crop = frame[y1:y2, x1:x2]
+    if vehicle_crop.size == 0:
+        return
+        
+    # Run plate detector on crop (using imgsz=320 for better accuracy on details)
+    plate_crop_results = plate_model(vehicle_crop, verbose=False, imgsz=320)
+    plate_boxes = plate_crop_results[0].boxes
+    
+    best_plate_box = None
+    best_plate_conf = 0.0
+    for pbox in plate_boxes:
+        pconf = pbox.conf[0].item()
+        if pconf > best_plate_conf:
+            best_plate_conf = pconf
+            best_plate_box = pbox
+            
+    # If a license plate is found with confidence > 0.45
+    if best_plate_box is not None and best_plate_conf > 0.45:
+        _process_found_plate(best_plate_box, x1, y1, track_id, img, frame, counts, colors)
+    else:
+        # Fallback geometry estimation for cars, trucks, buses if large enough
+        _process_fallback_plate(x1, y1, x2, y2, w, h, track_id, mapped_cls_id, img, counts, colors)
+
+def _process_single_vehicle(box, track_id, img, frame, counts, colors, is_coco):
+    raw_cls_id = int(box.cls[0].item())
+    confidence = box.conf[0].item()
+    
+    is_vehicle = (raw_cls_id in COCO_MAP) if is_coco else (raw_cls_id in [0, 1, 2, 3])
+    if confidence <= 0.30 or not is_vehicle:
+        return
+        
+    mapped_cls_id = COCO_MAP[raw_cls_id] if is_coco else raw_cls_id
+    
+    # Apply class smoothing using majority voting based on track_id
+    if track_id is not None:
+        mapped_cls_id = get_smoothed_class(track_id, mapped_cls_id)
+        
+    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+    
+    # Apply bounding box smoothing using moving average
+    if track_id is not None:
+        x1, y1, x2, y2 = get_smoothed_box(track_id, (x1, y1, x2, y2))
+        
+    color = colors.get(mapped_cls_id, (255, 255, 255))
+    
+    # Draw vehicle box
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+    
+    # Draw vehicle label text in Vietnamese
+    class_name = CLASS_NAMES_VI.get(mapped_cls_id, "Khong xac dinh")
+    label = f"{class_name} {confidence:.2f}"
+    cv2.putText(img, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    if mapped_cls_id in counts:
+        counts[mapped_cls_id] += 1
+        
+    # Cascade: Crop vehicle and detect license plate inside it
+    w = x2 - x1
+    h = y2 - y1
+    
+    # Only look for plates in vehicles of reasonable size
+    if w > 40 and h > 40:
+        _detect_license_plate(x1, y1, x2, y2, w, h, track_id, mapped_cls_id, img, frame, counts, colors)
+
+def _process_stream_detections(vehicle_results, img, frame, counts, colors, is_coco):
+    vehicle_boxes = vehicle_results[0].boxes
+    if vehicle_boxes is not None and len(vehicle_boxes) > 0:
+        if vehicle_boxes.id is not None:
+            track_ids = vehicle_boxes.id.int().tolist()
+        else:
+            track_ids = [None] * len(vehicle_boxes)
+            
+        for idx, box in enumerate(vehicle_boxes):
+            _process_single_vehicle(box, track_ids[idx], img, frame, counts, colors, is_coco)
 
 def gen_frames(video_id):
     """Generate JPEG frames with YOLO26 detections and real-time VietOCR."""
@@ -419,6 +604,8 @@ def gen_frames(video_id):
     # Set OpenCV buffer to 1 to reduce playback delay/latency
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
+    is_coco = (len(vehicle_model.names) > 10)
+    
     try:
         while True:
             success, frame = cap.read()
@@ -436,173 +623,7 @@ def gen_frames(video_id):
             img = frame.copy()
             
             # Process detected vehicles
-            vehicle_boxes = vehicle_results[0].boxes
-            if vehicle_boxes is not None and len(vehicle_boxes) > 0:
-                if vehicle_boxes.id is not None:
-                    track_ids = vehicle_boxes.id.int().tolist()
-                else:
-                    track_ids = [None] * len(vehicle_boxes)
-                    
-                for idx, box in enumerate(vehicle_boxes):
-                    raw_cls_id = int(box.cls[0].item())
-                    confidence = box.conf[0].item()
-                    track_id = track_ids[idx]
-                    
-                    # Check confidence threshold and if the class is a vehicle (car, motorcycle, truck, bus)
-                    is_coco = (len(vehicle_model.names) > 10)
-                    is_vehicle = (raw_cls_id in COCO_MAP) if is_coco else (raw_cls_id in [0, 1, 2, 3])
-                    
-                    if confidence > 0.30 and is_vehicle:
-                        mapped_cls_id = COCO_MAP[raw_cls_id] if is_coco else raw_cls_id
-                        
-                        # Apply class smoothing using majority voting based on track_id
-                        if track_id is not None:
-                            mapped_cls_id = get_smoothed_class(track_id, mapped_cls_id)
-                            
-                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                        
-                        # Apply bounding box smoothing using moving average
-                        if track_id is not None:
-                            x1, y1, x2, y2 = get_smoothed_box(track_id, (x1, y1, x2, y2))
-                            
-                        color = colors.get(mapped_cls_id, (255, 255, 255))
-                        
-                        # Draw vehicle box
-                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                        
-                        # Draw vehicle label text in Vietnamese
-                        class_name = CLASS_NAMES_VI.get(mapped_cls_id, "Khong xac dinh")
-                        label = f"{class_name} {confidence:.2f}"
-                        cv2.putText(img, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                        
-                        if mapped_cls_id in counts:
-                            counts[mapped_cls_id] += 1
-                            
-                        # Cascade: Crop vehicle and detect license plate inside it
-                        w = x2 - x1
-                        h = y2 - y1
-                        
-                        # Only look for plates in vehicles of reasonable size
-                        if w > 40 and h > 40:
-                            # Crop the vehicle from original frame
-                            vehicle_crop = frame[y1:y2, x1:x2]
-                            if vehicle_crop.size > 0:
-                                # Run plate detector on crop (using imgsz=320 for better accuracy on details)
-                                plate_crop_results = plate_model(vehicle_crop, verbose=False, imgsz=320)
-                                plate_boxes = plate_crop_results[0].boxes
-                                
-                                best_plate_box = None
-                                best_plate_conf = 0.0
-                                for pbox in plate_boxes:
-                                    pconf = pbox.conf[0].item()
-                                    if pconf > best_plate_conf:
-                                        best_plate_conf = pconf
-                                        best_plate_box = pbox
-                                
-                                # If a license plate is found with confidence > 0.45
-                                if best_plate_box is not None and best_plate_conf > 0.45:
-                                    px1_c, py1_c, px2_c, py2_c = map(int, best_plate_box.xyxy[0].tolist())
-                                    
-                                    # Convert relative coordinates to absolute coordinates on main frame
-                                    px1 = x1 + px1_c
-                                    py1 = y1 + py1_c
-                                    px2 = x1 + px2_c
-                                    py2 = y1 + py2_c
-                                    
-                                    # The new model has 1 class (0: plate). Use Aspect Ratio and HSV color check.
-                                    pw = px2 - px1
-                                    ph = py2 - py1
-                                    ar = pw / ph if ph > 0 else 1.0
-                                    
-                                    # Standard Vietnamese square plate is 280x200 (AR ~1.4), long plate is 470x110 (AR ~4.27).
-                                    is_square = ar <= 1.7
-                                    
-                                    # Detect if yellow plate by checking color in HSV space on the plate crop
-                                    is_yellow = False
-                                    plate_crop_temp = frame[py1:py2, px1:px2]
-                                    if plate_crop_temp.size > 0:
-                                        try:
-                                            hsv = cv2.cvtColor(plate_crop_temp, cv2.COLOR_BGR2HSV)
-                                            # Yellow color range in HSV: Hue [10, 35], Saturation [50, 255], Value [50, 255]
-                                            lower_yellow = np.array([10, 50, 50])
-                                            upper_yellow = np.array([35, 255, 255])
-                                            mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-                                            # If more than 15% of the plate is yellow, classify it as a yellow plate (bien vang)
-                                            is_yellow = (np.count_nonzero(mask) / mask.size) > 0.15
-                                        except Exception:
-                                            pass
-                                        
-                                    # Determine display color and label
-                                    plate_color = (0, 255, 255) if is_yellow else colors[4] # Yellow or Red box
-                                    
-                                    # Draw plate box
-                                    cv2.rectangle(img, (px1, py1), (px2, py2), plate_color, 2)
-                                    
-                                    current_time = time.time()
-                                    plate_no = None
-                                    
-                                    # Check tracking history cache first to completely eliminate text flickering
-                                    if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
-                                        # Keep valid plates cached for 10.0 seconds, but retry "N/A" after 1.5 seconds
-                                        cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
-                                        if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
-                                            plate_no = tracking_history[track_id]["plate_text"]
-                                            
-                                    if plate_no is None:
-                                        # Crop the plate from original frame for OCR
-                                        plate_crop = frame[py1:py2, px1:px2]
-                                        # Căn chỉnh góc nghiêng và nhận diện chữ bằng OCR (Paddle/EasyOCR)
-                                        plate_no = perform_ocr(plate_crop, is_square)
-                                            
-                                        # Tắt cơ chế giả lập biển số: hiển thị N/A nếu OCR thất bại
-                                        if not plate_no:
-                                            plate_no = "N/A"
-                                            
-                                        # Save to tracking history cache
-                                        if track_id is not None:
-                                            tracking_history[track_id]["plate_text"] = plate_no
-                                            tracking_history[track_id]["plate_time"] = current_time
-                                    
-                                    # Draw plate text overlay
-                                    plate_prefix = "Bien vang" if is_yellow else "Bien so"
-                                    plate_label = f"{plate_prefix}: {plate_no}"
-                                    cv2.putText(img, plate_label, (px1, max(py1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, plate_color, 1)
-                                    counts[4] += 1
-                                    
-                                else:
-                                    # Fallback geometry estimation for cars, trucks, buses if large enough
-                                    if mapped_cls_id in [0, 2, 3] and w > 75 and h > 75:
-                                        plate_w = int(w * 0.32)
-                                        plate_h = int(h * 0.14)
-                                        plate_x = x1 + int(w * 0.5)
-                                        plate_y = y1 + int(h * 0.72)
-                                        
-                                        px1 = max(x1, plate_x - plate_w // 2)
-                                        py1 = max(y1, plate_y)
-                                        px2 = min(x2, plate_x + plate_w // 2)
-                                        py2 = min(y2, plate_y + plate_h)
-                                        
-                                        cv2.rectangle(img, (px1, py1), (px2, py2), colors[4], 1)
-                                        
-                                        current_time = time.time()
-                                        plate_no = None
-                                        
-                                        # Check tracking history cache for fallback
-                                        if track_id is not None and tracking_history[track_id]["plate_text"] is not None:
-                                            cache_duration = 10.0 if tracking_history[track_id]["plate_text"] != "N/A" else 1.5
-                                            if current_time - tracking_history[track_id]["plate_time"] < cache_duration:
-                                                plate_no = tracking_history[track_id]["plate_text"]
-                                                
-                                        if plate_no is None:
-                                            # Tắt cơ chế giả lập biển số cho ước lượng vùng biển: đặt mặc định là N/A
-                                            plate_no = "N/A"
-                                            if track_id is not None:
-                                                tracking_history[track_id]["plate_text"] = plate_no
-                                                tracking_history[track_id]["plate_time"] = current_time
-                                                
-                                        plate_label = f"Bien so: {plate_no}"
-                                        cv2.putText(img, plate_label, (px1, max(py1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, colors[4], 1)
-                                        counts[4] += 1
+            _process_stream_detections(vehicle_results, img, frame, counts, colors, is_coco)
             
             # FPS calculation
             curr_time = time.time()
