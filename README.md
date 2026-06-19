@@ -1,120 +1,84 @@
-# Dự án Nhận diện Phương tiện & Biển số xe bằng YOLO26 (YouTube Live Stream)
+# 🚦 Hệ Thống Giám Sát Giao Thông & Nhận Diện Biển Số Xe (YOLO26 + VietOCR)
 
-Dự án này là hệ thống Computer Vision hoàn chỉnh cho phép:
+Dự án này là một hệ thống Computer Vision hoàn chỉnh, kết hợp phát hiện phương tiện, theo dõi hành trình (tracking), định vị biển số và nhận diện ký tự quang học (OCR) thời gian thực từ các nguồn phát trực tiếp YouTube Live Stream (camera giao thông đô thị).
 
-1. **Kết nối thời gian thực** tới một luồng YouTube Live Stream (ví dụ: Camera giao thông) hoặc video YouTube thông thường để tự động chụp ảnh trích xuất làm tập dữ liệu (Dataset).
-2. **Tự động dán nhãn (Auto-labeling)** bằng mô hình pretrained YOLO26 để gán nhãn cho các phương tiện: Ô tô (car), Xe máy (motorcycle), Xe tải (truck), Xe buýt (bus).
-3. **Huấn luyện (Training)** mô hình YOLO26 trên tập dữ liệu tùy chỉnh đó (tự động phát hiện và hỗ trợ cả huấn luyện trên CPU hoặc GPU CUDA).
-4. **Suy luận kiểm thử (Inference)** vẽ các hộp nhận diện (bounding box) trực quan có mã màu riêng biệt cho từng lớp đối tượng.
+## 🌟 Tính năng nổi bật
 
----
-
-## 1. Cấu trúc Dự án
-
-```text
-computer_vision/
-│
-├── config/
-│   └── dataset.yaml           # Cấu hình đường dẫn dataset và danh sách lớp đối tượng cho YOLO
-│
-├── src/
-│   ├── data_downloader.py     # Phân tích & Tải/Trích xuất khung ảnh từ YouTube Live/VOD
-│   ├── auto_label.py          # Tự động gán nhãn các lớp xe cộ bằng YOLO26 pretrained
-│   ├── train.py               # Huấn luyện mô hình YOLO26 (hỗ trợ CPU/CUDA GPU)
-│   └── inference.py           # Chạy suy luận nhận diện phương tiện trên ảnh/video
-│
-├── dataset/                   # Thư mục chứa hình ảnh và file nhãn đã gán
-│   ├── images/
-│   │   ├── train/             # Ảnh dùng để Train (80%)
-│   │   ├── val/               # Ảnh dùng để Validation (8%)
-│   │   └── test/              # Ảnh dùng để Test (12%)
-│   └── labels/
-│       ├── train/             # Nhãn (.txt) tương ứng của ảnh Train
-│       ├── val/               # Nhãn (.txt) tương ứng của ảnh Val
-│       └── test/              # Nhãn (.txt) tương ứng của ảnh Test
-│
-├── runs/                      # Kết quả huấn luyện và suy luận
-│   ├── detect/
-│   │   ├── yolo26_traffic/    # Chứa kết quả huấn luyện (file best.pt, đồ thị loss...)
-│   │   └── inference_results/ # Kết quả vẽ bounding box kiểm thử
-│
-├── requirements.txt           # Các thư viện Python cần thiết
-└── README.md                  # Tài liệu hướng dẫn sử dụng (File này)
-```
+1. **Dashboard Giám Sát Trực Tuyến**: Giao diện Flask Web Server cho phép xem đồng thời 6 luồng camera giao thông trực tiếp với tốc độ khung hình cao.
+2. **Nhận Diện Phương Tiện & Theo Dõi**: Sử dụng YOLO26 kết hợp thuật toán **ByteTrack** để bám đuôi đối tượng, đồng thời làm mượt hộp giới hạn (Bounding Box Smoothing) và bình chọn lớp (Class Smoothing) qua nhiều khung hình.
+3. **Phát Hiện Biển Số Xe Hai Giai Đoạn (Cascaded Detection)**: Nhận diện biển số xe ngay bên trong vùng cắt của phương tiện đã được phát hiện để tối ưu độ chính xác.
+4. **Nhận Diện Chữ Số Biển Số Xe (OCR)**:
+   * **Deskew**: Tự động căn chỉnh góc nghiêng của biển số bằng bộ lọc Hough Lines.
+   * **OCR Backend**: Linh hoạt chuyển đổi giữa **PaddleOCR** (ưu tiên) và **EasyOCR**.
+   * **Phân biệt biển vàng**: Kiểm tra không gian màu HSV để tự động gắn nhãn "Biển vàng" (xe kinh doanh vận tải) hoặc "Biển số" thường.
+   * **Chống nhấp nháy (Anti-flickering)**: Lưu trữ bộ nhớ cache theo `track_id` để biển số hiển thị ổn định, giảm tải cho CPU.
 
 ---
 
-## 2. Cài đặt Môi trường
+## 📂 Cấu Trúc Dự Án
 
-Đảm bảo bạn đã cài đặt Python (phiên bản khuyến nghị: >=3.10).
-Mở Terminal / PowerShell tại thư mục dự án và chạy lệnh sau để cài đặt các thư viện:
+* [src/web_server.py](file:///c:/dev/computer_vision/src/web_server.py): Flask Web Server chính quản lý luồng livestream, xử lý hình ảnh và thống kê thời gian thực.
+* [src/train.py](file:///c:/dev/computer_vision/src/train.py): Script huấn luyện mô hình YOLO26 phát hiện phương tiện.
+* [src/train_plate.py](file:///c:/dev/computer_vision/src/train_plate.py): Script huấn luyện mô hình YOLO26 phát hiện biển số xe.
+* [src/data_downloader.py](file:///c:/dev/computer_vision/src/data_downloader.py): Trích xuất ảnh mẫu từ các luồng YouTube Livestream.
+* [src/auto_label.py](file:///c:/dev/computer_vision/src/auto_label.py): Tự động gán nhãn phương tiện bằng mô hình YOLO26 pretrained.
+
+---
+
+## 🛠️ Cài Đặt Môi Trường
+
+Kích hoạt môi trường ảo `.venv` và cài đặt các thư viện cần thiết:
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
-
-## 3. Cách Vận hành Dự án
-
-### Bước 1: Trích xuất Dữ liệu ảnh từ YouTube Live Stream
-
-Mở file `src/data_downloader.py` và cập nhật đường dẫn video/live stream tại biến `youtube_url` trong khối `if __name__ == "__main__":`. Sau đó chạy lệnh:
+### Kích hoạt GPU (CUDA) để huấn luyện & chạy thời gian thực:
+Nếu máy tính của bạn sử dụng card đồ họa rời NVIDIA (ví dụ: RTX 4060) và muốn tận dụng GPU, hãy cài đặt phiên bản PyTorch hỗ trợ CUDA bằng lệnh:
 
 ```bash
-python src/data_downloader.py
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 --force-reinstall
 ```
-
-- **Nếu là Live Stream:** Chương trình sẽ tự động lấy link luồng HLS trực tiếp (`.m3u8`) và chụp 1 ảnh mỗi 2 giây trong vòng 5 phút (300 giây). Bạn có thể bấm phím `'q'` tại cửa sổ hiển thị để dừng chụp sớm bất kỳ lúc nào.
-- **Nếu là Video thường:** Chương trình tải video về máy và trích xuất ảnh.
-
-### Bước 2: Tự động dán nhãn Phương tiện
-
-Để tiết kiệm thời gian vẽ tay cho các phương tiện phổ biến, hãy chạy script dán nhãn tự động bằng mô hình YOLO26 pretrained trên COCO:
-
-```bash
-python src/auto_label.py
-```
-
-Script sẽ tự quét qua toàn bộ ảnh trong `dataset/images/` và sinh ra các file `.txt` tương ứng trong `dataset/labels/` chứa tọa độ chuẩn hóa của: `car` (0), `motorcycle` (1), `truck` (2), và `bus` (3).
-
-### Bước 3: Gán nhãn Biển số xe (License Plate - Lớp số 4)
-
-Vì mô hình COCO gốc không hỗ trợ phát hiện biển số xe, bạn cần thực hiện gán nhãn cho lớp `license_plate` (class `4`):
-
-1. Cài đặt công cụ gán nhãn như **labelImg** (`pip install labelImg` rồi gõ lệnh `labelImg` để mở giao diện) hoặc sử dụng các nền tảng online như **Roboflow**, **CVAT**.
-2. Mở thư mục `dataset/images/` và load danh sách nhãn đã có sẵn từ `dataset/labels/`.
-3. Vẽ thêm bounding box bao quanh các biển số xe hiển thị trên hình ảnh và gán nhãn là `license_plate` (ID lớp là `4`).
-4. Lưu đè lại file `.txt`.
-
-### Bước 4: Huấn luyện Mô hình YOLO26 Custom
-
-Sau khi đã chuẩn bị xong ảnh và nhãn, tiến hành huấn luyện bằng lệnh:
-
-```bash
-python src/train.py
-```
-
-- Script sẽ tự động phát hiện nếu máy tính có card đồ họa NVIDIA (CUDA) để huấn luyện trên GPU nhằm tăng tốc độ, nếu không sẽ tự động chạy trên CPU.
-- Bạn có thể thay đổi số lượng `epochs` và kích thước `batch` trong file `src/train.py` để phù hợp với tài nguyên máy của mình.
-- Sau khi kết thúc, file trọng số tốt nhất sẽ được lưu tại: `runs/detect/yolo26_traffic/vehicle_detector/weights/best.pt`.
-
-### Bước 5: Chạy thử Nghiệm Suy luận (Inference)
-
-Kiểm thử mô hình của bạn trên tập validation hoặc các hình ảnh mới:
-
-```bash
-python src/inference.py
-```
-
-Kết quả ảnh dự đoán đã được khoanh vùng và dán nhãn màu sắc bắt mắt sẽ được xuất ra thư mục: `runs/detect/inference_results/`.
 
 ---
 
-## Phân loại mã màu Nhận diện
+## 🚀 Hướng Dẫn Vận Hành
 
-- **car (ô tô):** Màu xanh lá (Green)
-- **motorcycle (xe máy):** Màu xanh dương (Blue)
-- **truck (xe tải):** Màu vàng (Yellow)
-- **bus (xe buýt):** Màu cam (Orange)
-- **license_plate (biển số xe):** Màu đỏ (Red)
+### 1. Khởi chạy Web Dashboard
+Để chạy máy chủ web và xem luồng giám sát camera thời gian thực, hãy thực thi lệnh:
+
+```bash
+python src/web_server.py
+```
+Mở trình duyệt và truy cập: `http://localhost:5000`
+
+### 2. Thu thập & Tự động gán nhãn dữ liệu (Nếu muốn mở rộng Dataset)
+* **Chụp ảnh từ camera**: Chạy lệnh để chụp khung hình từ luồng stream:
+  ```bash
+  python src/data_downloader.py
+  ```
+* **Tự động dán nhãn**: Chạy lệnh để mô hình tự động khoanh vùng và gán nhãn trước các phương tiện:
+  ```bash
+  python src/auto_label.py
+  ```
+
+### 3. Huấn luyện mô hình tùy chỉnh
+* **Huấn luyện mô hình phương tiện**:
+  ```bash
+  python src/train.py
+  ```
+* **Huấn luyện mô hình biển số**:
+  ```bash
+  python src/train_plate.py
+  ```
+
+---
+
+## 🎨 Phân Loại Nhận Diện
+
+* **Ô tô (car)**: Khung màu xanh lá 🟢
+* **Xe máy (motorcycle)**: Khung màu xanh dương 🔵
+* **Xe tải (truck)**: Khung màu vàng nhạt 🟡
+* **Xe buýt (bus)**: Khung màu cam 🟠
+* **Biển số thường**: Khung màu đỏ 🔴
+* **Biển số vàng**: Khung màu vàng tươi 🟡 (Có ghi chú `Bien vang` trên hộp)
