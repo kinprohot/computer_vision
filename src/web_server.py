@@ -38,23 +38,34 @@ else:
     print(f"[*] Loading custom license plate model: {plate_model_path}")
 plate_model = YOLO(str(plate_model_path))
 
-# Initialize OCR Reader (Prefer PaddleOCR, fall back to EasyOCR)
-import torch
-use_gpu = torch.cuda.is_available()
-ocr_backend = None
-paddle_reader = None
-easyocr_reader = None
+# Try loading API key from .env file if it exists
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if not env_path.exists():
+    env_path = Path(".env")
+if env_path.exists():
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line_str = line.strip()
+                if line_str and not line_str.startswith("#") and "=" in line_str:
+                    key, val = line_str.split("=", 1)
+                    os.environ[key.strip()] = val.strip()
+    except Exception as e_env:
+        print(f"[!] Warning: Failed to parse .env file: {e_env}")
 
-try:
-    print("[*] Attempting to initialize PaddleOCR...")
-    from paddleocr import PaddleOCR
-    # use_textline_orientation instead of use_angle_cls (deprecated)
-    # device='gpu'/'cpu' instead of use_gpu (unknown argument in newer versions)
-    paddle_reader = PaddleOCR(use_textline_orientation=True, lang='en', device='gpu' if use_gpu else 'cpu')
-    ocr_backend = "paddle"
-    print("[*] PaddleOCR Reader initialized successfully!")
-except Exception as e_paddle:
-    print(f"[!] Failed to initialize PaddleOCR: {e_paddle}")
+import google.generativeai as genai
+import PIL.Image
+
+# Initialize Gemini Model
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+model = None
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
+    # Use gemini-2.5-flash for fast vision tasks
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    print("[*] Gemini VLM API initialized successfully!")
+else:
+    print("[!] WARNING: GEMINI_API_KEY is not set in environment or .env file. Cloud VLM OCR will fail until set.")
 
 
 # Map COCO classes to our custom dashboard class indices
@@ -284,93 +295,44 @@ def format_vietnamese_plate(plate_no):
         
     return f"{prefix}-{formatted_num}"
 
-def preprocess_easyocr(crop):
-    """Upscale if too small to help OCR detection."""
-    try:
-        if crop is None or crop.size == 0:
-            return crop
-        h, w = crop.shape[:2]
-        target_w = 250
-        if w < target_w:
-            scale = target_w / w
-            crop = cv2.resize(crop, (target_w, int(h * scale)), interpolation=cv2.INTER_CUBIC)
-        return crop
-    except Exception as e:
-        print(f"[!] Error in preprocess_easyocr: {e}")
-        return crop
-
-def _run_ocr_backend(plate_rgb):
-    global ocr_backend, paddle_reader, easyocr_reader
-    if ocr_backend == "paddle":
-        ocr_res = paddle_reader.ocr(plate_rgb, cls=True)
-        if not ocr_res or not ocr_res[0]:
-            return None
-        return [(res[0], res[1][0]) for res in ocr_res[0]]
-        
-    if ocr_backend == "easyocr":
-        results = easyocr_reader.readtext(plate_rgb)
-        if not results:
-            return None
-        return [(res[0], res[1]) for res in results]
-        
-    return None
-
-def _process_square_plate(results_sorted):
-    if len(results_sorted) >= 2:
-        top_raw = results_sorted[0][1]
-        bottom_raw = results_sorted[1][1]
-        top_clean = correct_plate_string(top_raw, is_top_line=True)
-        bottom_clean = correct_plate_string(bottom_raw, is_bottom_line=True)
-        if top_clean or bottom_clean:
-            raw_plate = f"{top_clean or ''}{bottom_clean or ''}"
-            return format_vietnamese_plate(raw_plate)
-    return None
-
-def _process_single_blocks(results_sorted):
-    texts = []
-    for res in results_sorted:
-        text = res[1]
-        cleaned = "".join([c for c in text if c.isalnum()]).upper()
-        if cleaned:
-            texts.append(cleaned)
-            
-    if not texts:
-        return None
-        
-    combined = "".join(texts)
-    corrected = correct_plate_string(combined)
-    return format_vietnamese_plate(corrected)
-
 def perform_ocr(plate_crop, is_square):
-    global ocr_backend
-    if ocr_backend is None:
+    global model
+    if model is None:
         return None
         
     try:
         if plate_crop is None or plate_crop.size == 0:
             return None
             
-        # Preprocess plate crop (deskew + upscale)
+        # Preprocess plate crop (deskew)
         plate_crop = deskew_plate(plate_crop)
-        plate_crop = preprocess_easyocr(plate_crop)
         
         # Convert BGR to RGB
         plate_rgb = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2RGB)
         
-        ocr_results = _run_ocr_backend(plate_rgb)
-        if not ocr_results:
+        # Convert to PIL Image
+        pil_img = PIL.Image.fromarray(plate_rgb)
+        
+        # Configure prompt
+        prompt = (
+            "Read the text on this Vietnamese license plate. "
+            "Return ONLY the alphanumeric characters of the plate, formatted as standard plate text (e.g., 29A-123.45 or 30H-999.99). "
+            "Do not include any other words, markdown, or punctuation unless it is part of the plate."
+        )
+        
+        # Call Gemini API
+        response = model.generate_content([prompt, pil_img])
+        text = response.text.strip() if response.text else None
+        if not text:
             return None
             
-        results_sorted = sorted(ocr_results, key=lambda r: (r[0][0][1], r[0][0][0]))
+        # Clean text
+        cleaned = text.replace("\n", "").replace(" ", "").upper().replace("`", "")
         
-        if is_square:
-            val = _process_square_plate(results_sorted)
-            if val is not None:
-                return val
-                
-        return _process_single_blocks(results_sorted)
+        # Format Vietnamese license plate structure
+        return format_vietnamese_plate(cleaned)
     except Exception as e:
-        print(f"[!] OCR Exception ({ocr_backend}): {e}")
+        print(f"[!] Gemini VLM OCR failed: {e}")
         return None
 
 def _is_plate_yellow(plate_crop_temp):
