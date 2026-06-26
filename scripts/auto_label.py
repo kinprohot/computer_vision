@@ -72,4 +72,4 @@ def auto_label_dataset(dataset_dir="dataset", model_name="yolo26n.pt"):
     print("NOTE: License plates (class 4) must be annotated manually (e.g. using CVAT or LabelImg) since they are not in the default COCO dataset.")
 
 if __name__ == "__main__":
-    auto_label_dataset("dataset", "yolo26n.pt")
+    auto_label_dataset("dataset", "weights/yolo26n.pt")

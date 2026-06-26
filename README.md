@@ -7,11 +7,11 @@ Dự án này là một hệ thống Computer Vision hoàn chỉnh, kết hợp 
 1. **Dashboard Giám Sát Trực Tuyến**: Giao diện Flask Web Server cho phép xem đồng thời 6 luồng camera giao thông trực tiếp với tốc độ khung hình cao.
 2. **Nhận Diện Phương Tiện & Theo Dõi**: Sử dụng YOLO26 kết hợp thuật toán **ByteTrack** để bám đuôi đối tượng, đồng thời làm mượt hộp giới hạn (Bounding Box Smoothing) và bình chọn lớp (Class Smoothing) qua nhiều khung hình.
 3. **Phát Hiện Biển Số Xe Hai Giai Đoạn (Cascaded Detection)**: Nhận diện biển số xe ngay bên trong vùng cắt của phương tiện đã được phát hiện để tối ưu độ chính xác.
-4. **Nhận Diện Chữ Số Biển Số Xe (OCR)**:
+4. **Nhận Diện Chữ Số Biển Số Xe (VLM OCR)**:
    * **Deskew**: Tự động căn chỉnh góc nghiêng của biển số bằng bộ lọc Hough Lines.
-   * **OCR Backend**: Linh hoạt chuyển đổi giữa **PaddleOCR** (ưu tiên) và **EasyOCR**.
+   * **Gemini VLM Integration**: Sử dụng mô hình Cloud Vision-Language Model **Gemini 2.5 Flash** thay thế hoàn toàn các thư viện OCR cục bộ (PaddleOCR/EasyOCR). Giúp tăng độ chính xác vượt trội khi nhận diện chữ số bị mờ, nghiêng, hoặc thiếu sáng.
    * **Phân biệt biển vàng**: Kiểm tra không gian màu HSV để tự động gắn nhãn "Biển vàng" (xe kinh doanh vận tải) hoặc "Biển số" thường.
-   * **Chống nhấp nháy (Anti-flickering)**: Lưu trữ bộ nhớ cache theo `track_id` để biển số hiển thị ổn định, giảm tải cho CPU.
+   * **Chống nhấp nháy (Anti-flickering)**: Lưu trữ bộ nhớ cache theo `track_id` kết hợp với Cloud API giúp tối ưu số lượng gọi API, giảm tải tối đa cho cả CPU và băng thông mạng.
 
 ---
 
@@ -32,6 +32,13 @@ Kích hoạt môi trường ảo `.venv` và cài đặt các thư viện cần 
 ```bash
 pip install -r requirements.txt
 ```
+
+### Cấu hình API Key cho Gemini VLM:
+Tạo file `.env` tại thư mục gốc của dự án (mẫu `.env` đã được tạo sẵn) và thêm khóa API của bạn:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+Bạn có thể nhận khóa API tại [Google AI Studio](https://aistudio.google.com/).
 
 ### Kích hoạt GPU (CUDA) để huấn luyện & chạy thời gian thực:
 Nếu máy tính của bạn sử dụng card đồ họa rời NVIDIA (ví dụ: RTX 4060) và muốn tận dụng GPU, hãy cài đặt phiên bản PyTorch hỗ trợ CUDA bằng lệnh:

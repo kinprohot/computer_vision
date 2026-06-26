@@ -8,7 +8,7 @@ def train_plate_detector():
     project_root = Path(__file__).resolve().parent.parent
     
     print("Initializing YOLO26 model for license plate detection...")
-    model_path = project_root / "yolo26n.pt"
+    model_path = project_root / "weights" / "yolo26n.pt"
     model = YOLO(str(model_path)) 
 
     # Detect device
@@ -34,7 +34,7 @@ def train_plate_detector():
     
     # Copy the best trained model to project root as plate_best.pt
     best_weights_path = project_root / "runs" / "detect" / "yolo26_plate" / "plate_detector" / "weights" / "best.pt"
-    dest_path = project_root / "plate_best.pt"
+    dest_path = project_root / "weights" / "plate_best.pt"
     if best_weights_path.exists():
         print(f"Copying best model weights from {best_weights_path} to {dest_path}")
         shutil.copy(best_weights_path, dest_path)

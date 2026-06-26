@@ -9,7 +9,7 @@ def train_yolo26():
     
     # Load model (yolo26n is the Nano model - fast and efficient)
     print("Initializing YOLO26 model...")
-    model_path = project_root / "yolo26n.pt"
+    model_path = project_root / "weights" / "yolo26n.pt"
     model = YOLO(str(model_path)) 
 
     # Automatically detect if CUDA GPU is available
@@ -39,7 +39,7 @@ def train_yolo26():
     
     # Copy the best trained model to project root as vehicle_best.pt
     best_weights_path = project_root / "runs" / "detect" / "yolo26_traffic" / "vehicle_detector" / "weights" / "best.pt"
-    dest_path = project_root / "vehicle_best.pt"
+    dest_path = project_root / "weights" / "vehicle_best.pt"
     if best_weights_path.exists():
         print(f"Copying best model weights from {best_weights_path} to {dest_path}")
         shutil.copy(best_weights_path, dest_path)

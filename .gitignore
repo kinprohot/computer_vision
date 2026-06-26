@@ -1,0 +1,11 @@
+cookies.txt
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+weights/*.pt
+runs/
+logs/
+.vscode/
+.idea/
