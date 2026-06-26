@@ -1,91 +1,59 @@
-# 🚦 Hệ Thống Giám Sát Giao Thông & Nhận Diện Biển Số Xe (YOLO26 + VietOCR)
+# 🚦 Hệ Thống Giám Sát Giao Thông & Nhận Diện Biển Số Xe (YOLO26 + Gemini VLM)
 
-Dự án này là một hệ thống Computer Vision hoàn chỉnh, kết hợp phát hiện phương tiện, theo dõi hành trình (tracking), định vị biển số và nhận diện ký tự quang học (OCR) thời gian thực từ các nguồn phát trực tiếp YouTube Live Stream (camera giao thông đô thị).
-
-## 🌟 Tính năng nổi bật
-
-1. **Dashboard Giám Sát Trực Tuyến**: Giao diện Flask Web Server cho phép xem đồng thời 6 luồng camera giao thông trực tiếp với tốc độ khung hình cao.
-2. **Nhận Diện Phương Tiện & Theo Dõi**: Sử dụng YOLO26 kết hợp thuật toán **ByteTrack** để bám đuôi đối tượng, đồng thời làm mượt hộp giới hạn (Bounding Box Smoothing) và bình chọn lớp (Class Smoothing) qua nhiều khung hình.
-3. **Phát Hiện Biển Số Xe Hai Giai Đoạn (Cascaded Detection)**: Nhận diện biển số xe ngay bên trong vùng cắt của phương tiện đã được phát hiện để tối ưu độ chính xác.
-4. **Nhận Diện Chữ Số Biển Số Xe (VLM OCR)**:
-   * **Deskew**: Tự động căn chỉnh góc nghiêng của biển số bằng bộ lọc Hough Lines.
-   * **Gemini VLM Integration**: Sử dụng mô hình Cloud Vision-Language Model **Gemini 2.5 Flash** thay thế hoàn toàn các thư viện OCR cục bộ (PaddleOCR/EasyOCR). Giúp tăng độ chính xác vượt trội khi nhận diện chữ số bị mờ, nghiêng, hoặc thiếu sáng.
-   * **Phân biệt biển vàng**: Kiểm tra không gian màu HSV để tự động gắn nhãn "Biển vàng" (xe kinh doanh vận tải) hoặc "Biển số" thường.
-   * **Chống nhấp nháy (Anti-flickering)**: Lưu trữ bộ nhớ cache theo `track_id` kết hợp với Cloud API giúp tối ưu số lượng gọi API, giảm tải tối đa cho cả CPU và băng thông mạng.
+Hệ thống giám sát giao thông đô thị thông minh thời gian thực tích hợp công nghệ AI tiên tiến, hỗ trợ giám sát luồng phương tiện trực tiếp và tự động phân tích biển số xe với độ chính xác cao nhờ sự kết hợp giữa mô hình Object Detection và Vision-Language Model (VLM).
 
 ---
 
-## 📂 Cấu Trúc Dự Án
+## 🌟 Các Chức Năng Chính (Core Features)
 
-* [src/web_server.py](file:///c:/dev/computer_vision/src/web_server.py): Flask Web Server chính quản lý luồng livestream, xử lý hình ảnh và thống kê thời gian thực.
-* [src/train.py](file:///c:/dev/computer_vision/src/train.py): Script huấn luyện mô hình YOLO26 phát hiện phương tiện.
-* [src/train_plate.py](file:///c:/dev/computer_vision/src/train_plate.py): Script huấn luyện mô hình YOLO26 phát hiện biển số xe.
-* [src/data_downloader.py](file:///c:/dev/computer_vision/src/data_downloader.py): Trích xuất ảnh mẫu từ các luồng YouTube Livestream.
-* [src/auto_label.py](file:///c:/dev/computer_vision/src/auto_label.py): Tự động gán nhãn phương tiện bằng mô hình YOLO26 pretrained.
+1. **Dashboard Giám Sát Đa Luồng Thời Gian Thực (Multi-stream Monitoring)**
+   * Hỗ trợ giải mã và hiển thị đồng thời 6 luồng camera giao thông độ phân giải cao trực tiếp từ YouTube Live Stream.
+   * Cập nhật giao diện mượt mà với độ trễ thấp tối đa.
 
----
+2. **Nhận Diện & Theo Dõi Phương Tiện Thông Minh (Vehicle Tracking & Association)**
+   * Tự động phát hiện và phân loại các nhóm phương tiện giao thông phổ biến: Ô tô (`O to`), Xe máy (`Xe may`), Xe tải (`Xe tai`), Xe buýt (`Xe buyt`).
+   * Sử dụng thuật toán **ByteTrack** để gán ID duy nhất (`track_id`) cho từng phương tiện di chuyển trong vùng quan sát.
 
-## 🛠️ Cài Đặt Môi Trường
+3. **Làm Mượt Chuyển Động & Phân Loại Ổn Định (Smoothing Algorithms)**
+   * **Bounding Box Smoothing**: Áp dụng thuật toán Moving Average (Trung bình động) trên 5 khung hình gần nhất để làm mịn các hộp giới hạn, triệt tiêu hiện tượng rung lắc hộp nhận diện.
+   * **Class Smoothing**: Áp dụng cơ chế Majority Voting (Bỏ phiếu số đông) trên 10 khung hình để ổn định lớp phương tiện khi góc nhìn thay đổi.
 
-Kích hoạt môi trường ảo `.venv` và cài đặt các thư viện cần thiết:
+4. **Phát Hiện Biển Số Xe Hai Giai Đoạn (Cascaded Plate Detection)**
+   * Hạn chế sai số và nhiễu nền bằng cách chỉ kích hoạt mô hình phát hiện biển số xe bên trong vùng cắt ảnh (crop) của các phương tiện được phát hiện có kích thước hợp lệ.
 
-```bash
-pip install -r requirements.txt
-```
+5. **Nhận Diện Ký Tự Biển Số Độ Chính Xác Cao (Gemini VLM OCR)**
+   * Sử dụng mô hình Vision-Language Model **Gemini 2.5 Pro** thông qua API để đọc nội dung biển số từ ảnh cắt.
+   * Khả năng hiểu ngữ cảnh giúp đọc chính xác biển số kể cả trong các điều kiện bất lợi như ảnh bị mờ do chuyển động, góc nghiêng lớn, hoặc ánh sáng yếu.
 
-### Cấu hình API Key cho Gemini VLM:
-Tạo file `.env` tại thư mục gốc của dự án (mẫu `.env` đã được tạo sẵn) và thêm khóa API của bạn:
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-Bạn có thể nhận khóa API tại [Google AI Studio](https://aistudio.google.com/).
+6. **Tự Động Cân Chỉnh Góc Nghiêng (Deskewing)**
+   * Sử dụng bộ lọc Hough Lines để tự động đo góc lệch của biển số xe so với phương ngang và tiến hành xoay ảnh góc nghiêng trước khi gửi đến VLM nhằm tối ưu kết quả đọc ký tự.
 
-### Kích hoạt GPU (CUDA) để huấn luyện & chạy thời gian thực:
-Nếu máy tính của bạn sử dụng card đồ họa rời NVIDIA (ví dụ: RTX 4060) và muốn tận dụng GPU, hãy cài đặt phiên bản PyTorch hỗ trợ CUDA bằng lệnh:
+7. **Phân Loại Màu Biển Số (HSV Color Classification)**
+   * Tự động phân tích không gian màu HSV trên vùng biển số để phân loại giữa biển số trắng thông thường (`Bien so`) và biển số vàng kinh doanh vận tải (`Bien vang`).
 
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 --force-reinstall
-```
+8. **Chống Nhấp Nháy & Tối Ưu Hóa Tần Suất Gọi API (Anti-flickering Cache)**
+   * Lưu trữ bộ đệm cache biển số đã nhận diện theo `track_id` phương tiện.
+   * Giữ kết quả biển số ổn định không bị nhấp nháy qua từng frame và giới hạn số lượt gọi Cloud API để tối ưu hóa chi phí cũng như giảm băng thông mạng.
 
----
-
-## 🚀 Hướng Dẫn Vận Hành
-
-### 1. Khởi chạy Web Dashboard
-Để chạy máy chủ web và xem luồng giám sát camera thời gian thực, hãy thực thi lệnh:
-
-```bash
-python src/web_server.py
-```
-Mở trình duyệt và truy cập: `http://localhost:5000`
-
-### 2. Thu thập & Tự động gán nhãn dữ liệu (Nếu muốn mở rộng Dataset)
-* **Chụp ảnh từ camera**: Chạy lệnh để chụp khung hình từ luồng stream:
-  ```bash
-  python src/data_downloader.py
-  ```
-* **Tự động dán nhãn**: Chạy lệnh để mô hình tự động khoanh vùng và gán nhãn trước các phương tiện:
-  ```bash
-  python src/auto_label.py
-  ```
-
-### 3. Huấn luyện mô hình tùy chỉnh
-* **Huấn luyện mô hình phương tiện**:
-  ```bash
-  python src/train.py
-  ```
-* **Huấn luyện mô hình biển số**:
-  ```bash
-  python src/train_plate.py
-  ```
+9. **API Thống Kê Số Liệu Thời Gian Thực (Real-time Stats API)**
+   * Cung cấp endpoint API JSON cập nhật liên tục lưu lượng từng loại phương tiện đang hoạt động trên mỗi camera.
 
 ---
 
-## 🎨 Phân Loại Nhận Diện
+## 🛠️ Công Nghệ Sử Dụng (Technologies & Stack)
 
-* **Ô tô (car)**: Khung màu xanh lá 🟢
-* **Xe máy (motorcycle)**: Khung màu xanh dương 🔵
-* **Xe tải (truck)**: Khung màu vàng nhạt 🟡
-* **Xe buýt (bus)**: Khung màu cam 🟠
-* **Biển số thường**: Khung màu đỏ 🔴
-* **Biển số vàng**: Khung màu vàng tươi 🟡 (Có ghi chú `Bien vang` trên hộp)
+* **Ngôn ngữ**: Python 3.14+ (Tận dụng hiệu năng mới nhất của Python).
+* **Mô hình học máy & AI (Deep Learning & GenAI)**:
+  * **Ultralytics YOLO26**: Mô hình Object Detection thế hệ mới nhất cho tốc độ suy luận cực nhanh trên CPU và GPU.
+  * **ByteTrack**: Thuật toán bám đuôi đối tượng đa mục tiêu thời gian thực.
+  * **Google Generative AI (Gemini 2.5 Pro)**: Mô hình ngôn ngữ lớn đa phương thức đóng vai trò làm VLM OCR chính xác vượt trội.
+  * **PyTorch (CUDA GPU)**: Khung học sâu làm nền tảng chạy suy luận YOLO.
+* **Xử lý ảnh & Tính toán (Computer Vision & Math)**:
+  * **OpenCV**: Thư viện xử lý hình ảnh và video chính (Deskew, warpAffine, imencode, colorspaces).
+  * **NumPy**: Thư viện tính toán ma trận để phân tích phân phối góc nghiêng và không gian màu HSV.
+  * **Pillow (PIL)**: Chuyển đổi và thao tác định dạng ảnh đầu vào cho mô hình VLM.
+* **Môi trường & Web Dashboard**:
+  * **Flask**: Framework web tối giản để quản lý luồng camera và cung cấp JSON API.
+  * **yt-dlp**: Công cụ phân tích và giải mã trực tiếp URL livestream sang luồng HLS (`.m3u8`).
+  * **Python Dotenv**: Tự động cấu hình và nạp API key cục bộ an toàn.
+  * **Logging**: Module ghi nhật ký hệ thống tiêu chuẩn lưu trữ log chạy dịch vụ.
