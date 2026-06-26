@@ -55,14 +55,7 @@ try:
     print("[*] PaddleOCR Reader initialized successfully!")
 except Exception as e_paddle:
     print(f"[!] Failed to initialize PaddleOCR: {e_paddle}")
-    try:
-        print("[*] Falling back to EasyOCR...")
-        import easyocr
-        easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
-        ocr_backend = "easyocr"
-        print("[*] EasyOCR Reader initialized successfully!")
-    except Exception as e_easy:
-        print(f"[!] Failed to initialize EasyOCR: {e_easy}")
+
 
 # Map COCO classes to our custom dashboard class indices
 # COCO classes: 2: car, 3: motorcycle, 5: bus, 7: truck
